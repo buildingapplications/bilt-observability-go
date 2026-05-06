@@ -1,8 +1,5 @@
 # bilt-observability-go
 
-Shared observability bootstrap for bilt Go services. Mirrors the surface of
-[`@biltme/otel`](https://github.com/buildingapplications/bilt-observability-ts).
-
 > ## NOT FOR PUBLIC USE
 >
 > It is **internal infrastructure for bilt** maintained
