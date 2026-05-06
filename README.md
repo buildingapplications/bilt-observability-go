@@ -5,8 +5,7 @@ Shared observability bootstrap for bilt Go services. Mirrors the surface of
 
 > ## NOT FOR PUBLIC USE
 >
-> This module is published only because Go has no source/artifact decoupling.
-> It is not a product. It is **internal infrastructure for bilt** maintained
+> It is **internal infrastructure for bilt** maintained
 > for bilt services only.
 >
 > - **No semver contract.** Breaking changes can land on any version, including patch.
