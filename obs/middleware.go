@@ -1,6 +1,7 @@
 package obs
 
 import (
+	"context"
 	"net/http"
 	"time"
 
@@ -12,12 +13,21 @@ import (
 	"go.uber.org/zap"
 )
 
+// EnrichLogFieldsFunc returns extra key/value pairs to append to the access
+// log line. Called once per request after the handler returns. status is the
+// final response status. Return nil for no extras.
+type EnrichLogFieldsFunc func(ctx context.Context, status int) []any
+
 // MiddlewareOptions tunes HTTPMiddleware. All fields optional.
 type MiddlewareOptions struct {
 	// SkipPaths bypass tracing + access logging. Defaults to DefaultHealthPaths().
 	SkipPaths []string
 	// ServerName overrides the otelhttp server-name attribute. Defaults to ServiceName from Init.
 	ServerName string
+	// EnrichLogFields lets services append extra fields to the access log
+	// line (e.g., handler-attached error message, principal id). Receives the
+	// final status code so callers can be status-conditional.
+	EnrichLogFields EnrichLogFieldsFunc
 }
 
 // HTTPMiddleware returns the canonical chi middleware stack:
@@ -38,9 +48,11 @@ func HTTPMiddleware(lg *zap.SugaredLogger, opts MiddlewareOptions) func(http.Han
 
 	serverName := opts.ServerName
 
+	enrich := opts.EnrichLogFields
+
 	return func(next http.Handler) http.Handler {
 		stack := next
-		stack = accessLog(lg, skipSet)(stack)
+		stack = accessLog(lg, skipSet, enrich)(stack)
 		stack = contextEnrich(lg)(stack)
 		stack = chiRouteAttr()(stack)
 		stack = otelWithSkip(serverName, skipSet)(stack)
@@ -91,7 +103,7 @@ func contextEnrich(lg *zap.SugaredLogger) func(http.Handler) http.Handler {
 	}
 }
 
-func accessLog(lg *zap.SugaredLogger, skip map[string]struct{}) func(http.Handler) http.Handler {
+func accessLog(lg *zap.SugaredLogger, skip map[string]struct{}, enrich EnrichLogFieldsFunc) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if _, ok := skip[r.URL.Path]; ok {
@@ -120,6 +132,11 @@ func accessLog(lg *zap.SugaredLogger, skip map[string]struct{}) func(http.Handle
 				fields = append(fields, "trace_id", sc.TraceID().String())
 				if sc.HasSpanID() {
 					fields = append(fields, "span_id", sc.SpanID().String())
+				}
+			}
+			if enrich != nil {
+				if extra := enrich(r.Context(), ww.Status()); len(extra) > 0 {
+					fields = append(fields, extra...)
 				}
 			}
 			switch {

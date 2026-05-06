@@ -69,6 +69,7 @@ obs.LoggerFromContext(ctx, fallback) *zap.SugaredLogger
 obs.WithRequestID(ctx, id) context.Context
 obs.RequestIDFromContext(ctx) string
 obs.HTTPMiddleware(lg, MiddlewareOptions) func(http.Handler) http.Handler
+// MiddlewareOptions.EnrichLogFields(ctx, status) []any  // optional access-log enrichment
 obs.HTTPClient(*http.Client) *http.Client
 obs.DefaultHealthPaths() []string
 

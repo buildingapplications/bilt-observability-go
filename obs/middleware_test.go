@@ -1,6 +1,7 @@
 package obs
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -164,6 +165,62 @@ func TestHTTPMiddleware_NilLogger(t *testing.T) {
 	resetForTest()
 	r := chi.NewRouter()
 	r.Use(HTTPMiddleware(nil, MiddlewareOptions{SkipPaths: []string{}}))
+	r.Get("/x", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(200) })
+	srv := httptest.NewServer(r)
+	defer srv.Close()
+	httpGet(t, srv.URL+"/x")
+}
+
+func TestHTTPMiddleware_EnrichLogFields(t *testing.T) {
+	resetForTest()
+	sink := &captureSink{}
+	lg := newCapturedLogger(sink)
+
+	type errKey struct{}
+	enrich := func(ctx context.Context, status int) []any {
+		if status >= 400 {
+			if msg, _ := ctx.Value(errKey{}).(string); msg != "" {
+				return []any{"error", msg}
+			}
+		}
+		return nil
+	}
+
+	r := chi.NewRouter()
+	r.Use(HTTPMiddleware(lg, MiddlewareOptions{
+		SkipPaths:       []string{},
+		EnrichLogFields: enrich,
+	}))
+	r.Get("/ok", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(200) })
+	r.Get("/bad", func(w http.ResponseWriter, r *http.Request) {
+		*r = *r.WithContext(context.WithValue(r.Context(), errKey{}, "boom"))
+		w.WriteHeader(500)
+	})
+
+	srv := httptest.NewServer(r)
+	defer srv.Close()
+	httpGet(t, srv.URL+"/ok")
+	httpGet(t, srv.URL+"/bad")
+
+	out := strings.Join(sink.lines(), "\n")
+	if strings.Contains(out, `"error":"boom"`) == false {
+		t.Errorf("expected error field on 500: %s", out)
+	}
+	// 200 path should not carry error field
+	for _, line := range sink.lines() {
+		if strings.Contains(line, "/ok") && strings.Contains(line, `"error":`) {
+			t.Errorf("/ok line should not have error: %s", line)
+		}
+	}
+}
+
+func TestHTTPMiddleware_EnrichLogFields_NilSafe(t *testing.T) {
+	resetForTest()
+	r := chi.NewRouter()
+	r.Use(HTTPMiddleware(zap.NewNop().Sugar(), MiddlewareOptions{
+		SkipPaths:       []string{},
+		EnrichLogFields: nil,
+	}))
 	r.Get("/x", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(200) })
 	srv := httptest.NewServer(r)
 	defer srv.Close()
