@@ -25,9 +25,14 @@ type MiddlewareOptions struct {
 	// ServerName overrides the otelhttp server-name attribute. Defaults to ServiceName from Init.
 	ServerName string
 	// EnrichLogFields lets services append extra fields to the access log
-	// line (e.g., handler-attached error message, principal id). Receives the
-	// final status code so callers can be status-conditional.
+	// line (e.g., principal id, tenant id). Receives the final status code so
+	// callers can be status-conditional. Use SetHandlerError for per-request
+	// error messages — those are auto-included on 4xx/5xx without a hook.
 	EnrichLogFields EnrichLogFieldsFunc
+	// DisableHandlerError opts out of the automatic handler-error slot.
+	// Default: false (slot allocated; SetHandlerError works; access log emits
+	// "error" field on status >= 400 if SetHandlerError was called).
+	DisableHandlerError bool
 }
 
 // HTTPMiddleware returns the canonical chi middleware stack:
@@ -47,13 +52,16 @@ func HTTPMiddleware(lg *zap.SugaredLogger, opts MiddlewareOptions) func(http.Han
 	}
 
 	serverName := opts.ServerName
-
 	enrich := opts.EnrichLogFields
+	autoHandlerErr := !opts.DisableHandlerError
 
 	return func(next http.Handler) http.Handler {
 		stack := next
-		stack = accessLog(lg, skipSet, enrich)(stack)
+		stack = accessLog(lg, skipSet, enrich, autoHandlerErr)(stack)
 		stack = contextEnrich(lg)(stack)
+		if autoHandlerErr {
+			stack = handlerErrorSlot(stack)
+		}
 		stack = chiRouteAttr()(stack)
 		stack = otelWithSkip(serverName, skipSet)(stack)
 		stack = chimiddleware.Recoverer(stack)
@@ -61,6 +69,12 @@ func HTTPMiddleware(lg *zap.SugaredLogger, opts MiddlewareOptions) func(http.Han
 		stack = chimiddleware.RequestID(stack)
 		return stack
 	}
+}
+
+func handlerErrorSlot(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		next.ServeHTTP(w, r.WithContext(WithHandlerError(r.Context())))
+	})
 }
 
 func otelWithSkip(serverName string, skip map[string]struct{}) func(http.Handler) http.Handler {
@@ -103,7 +117,7 @@ func contextEnrich(lg *zap.SugaredLogger) func(http.Handler) http.Handler {
 	}
 }
 
-func accessLog(lg *zap.SugaredLogger, skip map[string]struct{}, enrich EnrichLogFieldsFunc) func(http.Handler) http.Handler {
+func accessLog(lg *zap.SugaredLogger, skip map[string]struct{}, enrich EnrichLogFieldsFunc, autoHandlerErr bool) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if _, ok := skip[r.URL.Path]; ok {
@@ -132,6 +146,11 @@ func accessLog(lg *zap.SugaredLogger, skip map[string]struct{}, enrich EnrichLog
 				fields = append(fields, "trace_id", sc.TraceID().String())
 				if sc.HasSpanID() {
 					fields = append(fields, "span_id", sc.SpanID().String())
+				}
+			}
+			if autoHandlerErr && ww.Status() >= 400 {
+				if msg := HandlerError(r.Context()); msg != "" {
+					fields = append(fields, "error", msg)
 				}
 			}
 			if enrich != nil {
