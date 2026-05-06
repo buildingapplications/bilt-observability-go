@@ -70,6 +70,11 @@ obs.WithRequestID(ctx, id) context.Context
 obs.RequestIDFromContext(ctx) string
 obs.HTTPMiddleware(lg, MiddlewareOptions) func(http.Handler) http.Handler
 // MiddlewareOptions.EnrichLogFields(ctx, status) []any  // optional access-log enrichment
+// MiddlewareOptions.DisableHandlerError bool             // opt out of auto handler-error wiring
+
+obs.WithHandlerError(ctx) ctx                // (auto-called by HTTPMiddleware)
+obs.SetHandlerError(ctx, msg string)         // call from handler/error mapper
+obs.HandlerError(ctx) string                 // (read by HTTPMiddleware on 4xx/5xx)
 obs.HTTPClient(*http.Client) *http.Client
 obs.DefaultHealthPaths() []string
 
