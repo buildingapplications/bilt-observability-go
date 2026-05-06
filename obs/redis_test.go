@@ -25,7 +25,7 @@ func TestInjectTraceContext_Empty(t *testing.T) {
 func TestInjectExtract_Roundtrip(t *testing.T) {
 	tp := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(sdktrace.NewSimpleSpanProcessor(tracetest.NewInMemoryExporter())))
 	otel.SetTracerProvider(tp)
-	defer tp.Shutdown(context.Background())
+	defer func() { _ = tp.Shutdown(context.Background()) }()
 
 	ctx, span := tp.Tracer("t").Start(context.Background(), "outer")
 	defer span.End()
@@ -65,7 +65,7 @@ func TestConsumerSpan_Kind(t *testing.T) {
 	exporter := tracetest.NewInMemoryExporter()
 	tp := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(sdktrace.NewSimpleSpanProcessor(exporter)))
 	otel.SetTracerProvider(tp)
-	defer tp.Shutdown(context.Background())
+	defer func() { _ = tp.Shutdown(context.Background()) }()
 
 	_, span := ConsumerSpan(context.Background(), ConsumerOpts{Destination: "stream-x", ConsumerGroup: "g1"})
 	span.End()
@@ -102,7 +102,7 @@ func TestProducerSpan_Kind(t *testing.T) {
 	exporter := tracetest.NewInMemoryExporter()
 	tp := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(sdktrace.NewSimpleSpanProcessor(exporter)))
 	otel.SetTracerProvider(tp)
-	defer tp.Shutdown(context.Background())
+	defer func() { _ = tp.Shutdown(context.Background()) }()
 
 	_, span := ProducerSpan(context.Background(), ProducerOpts{Destination: "stream-y"})
 	span.End()
