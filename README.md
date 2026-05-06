@@ -3,8 +3,20 @@
 Shared observability bootstrap for bilt Go services. Mirrors the surface of
 [`@biltme/otel`](https://github.com/buildingapplications/bilt-observability-ts).
 
-> Internal use only. No semver guarantees, no public API contract.
-> All rights reserved.
+> ## NOT FOR PUBLIC USE
+>
+> This module is published only because Go has no source/artifact decoupling.
+> It is not a product. It is **internal infrastructure for bilt** maintained
+> for bilt services only.
+>
+> - **No semver contract.** Breaking changes can land on any version, including patch.
+> - **No semantic-convention guarantees.** Span names, attribute keys, and log
+>   schemas track bilt's internal needs and can change without notice.
+> - **No support, no issue triage, no PRs accepted from outside the bilt team.**
+> - **All rights reserved.** No license is granted to use, copy, or redistribute.
+>
+> If you stumbled here from `pkg.go.dev` or a search engine: do not import this.
+> Use the upstream OpenTelemetry Go SDK directly.
 
 ## What it does
 
