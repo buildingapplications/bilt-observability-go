@@ -42,7 +42,7 @@ func TestHTTPClient_InjectsTraceparent(t *testing.T) {
 	exporter := tracetest.NewInMemoryExporter()
 	tp := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(sdktrace.NewSimpleSpanProcessor(exporter)))
 	otel.SetTracerProvider(tp)
-	defer tp.Shutdown(context.Background())
+	defer func() { _ = tp.Shutdown(context.Background()) }()
 	otel.SetTextMapPropagator(compositePropagator())
 
 	gotHeader := ""
@@ -62,7 +62,7 @@ func TestHTTPClient_InjectsTraceparent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("do: %v", err)
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 
 	if gotHeader == "" {
 		t.Error("traceparent header not injected")

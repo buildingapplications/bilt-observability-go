@@ -85,7 +85,7 @@ func TestLoggerFromContext_RequestIDInjected(t *testing.T) {
 
 func TestLoggerFromContext_TraceIDInjected(t *testing.T) {
 	tp := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(sdktrace.NewSimpleSpanProcessor(tracetest.NewInMemoryExporter())))
-	defer tp.Shutdown(context.Background())
+	defer func() { _ = tp.Shutdown(context.Background()) }()
 	tracer := tp.Tracer("test")
 
 	ctx, span := tracer.Start(context.Background(), "op")

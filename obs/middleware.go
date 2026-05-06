@@ -37,9 +37,6 @@ func HTTPMiddleware(lg *zap.SugaredLogger, opts MiddlewareOptions) func(http.Han
 	}
 
 	serverName := opts.ServerName
-	if serverName == "" && cachedLogger != nil {
-		// best-effort: cached logger has service field; we don't extract here.
-	}
 
 	return func(next http.Handler) http.Handler {
 		stack := next

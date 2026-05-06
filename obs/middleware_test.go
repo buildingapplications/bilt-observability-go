@@ -42,7 +42,7 @@ func TestHTTPMiddleware_HealthSkipped(t *testing.T) {
 	exporter := tracetest.NewInMemoryExporter()
 	tp := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(sdktrace.NewSimpleSpanProcessor(exporter)))
 	otel.SetTracerProvider(tp)
-	defer tp.Shutdown(t.Context())
+	defer func() { _ = tp.Shutdown(t.Context()) }()
 
 	r := chi.NewRouter()
 	r.Use(HTTPMiddleware(lg, MiddlewareOptions{}))
@@ -84,7 +84,7 @@ func TestHTTPMiddleware_RouteAttribute(t *testing.T) {
 	exporter := tracetest.NewInMemoryExporter()
 	tp := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(sdktrace.NewSimpleSpanProcessor(exporter)))
 	otel.SetTracerProvider(tp)
-	defer tp.Shutdown(t.Context())
+	defer func() { _ = tp.Shutdown(t.Context()) }()
 
 	r := chi.NewRouter()
 	r.Use(HTTPMiddleware(zap.NewNop().Sugar(), MiddlewareOptions{SkipPaths: []string{}}))
@@ -176,5 +176,5 @@ func httpGet(t *testing.T, url string) {
 	if err != nil {
 		t.Fatalf("get: %v", err)
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 }
