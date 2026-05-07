@@ -161,6 +161,49 @@ func TestHTTPMiddleware_RequestIDPropagated(t *testing.T) {
 	httpGet(t, srv.URL+"/x")
 }
 
+func TestHTTPMiddleware_PanicRecoveredWith500SpanStatus(t *testing.T) {
+	resetForTest()
+	exporter := tracetest.NewInMemoryExporter()
+	tp := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(sdktrace.NewSimpleSpanProcessor(exporter)))
+	otel.SetTracerProvider(tp)
+	defer func() { _ = tp.Shutdown(t.Context()) }()
+
+	r := chi.NewRouter()
+	r.Use(HTTPMiddleware(zap.NewNop().Sugar(), MiddlewareOptions{SkipPaths: []string{}}))
+	r.Get("/boom", func(w http.ResponseWriter, r *http.Request) {
+		panic("test panic")
+	})
+
+	srv := httptest.NewServer(r)
+	defer srv.Close()
+	resp, err := http.Get(srv.URL + "/boom")
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != 500 {
+		t.Errorf("expected 500 from Recoverer, got %d", resp.StatusCode)
+	}
+
+	spans := exporter.GetSpans()
+	if len(spans) == 0 {
+		t.Fatal("no spans recorded")
+	}
+	got := -1
+	for _, attr := range spans[0].Attributes {
+		if string(attr.Key) == "http.response.status_code" {
+			got = int(attr.Value.AsInt64())
+			break
+		}
+		if string(attr.Key) == "http.status_code" {
+			got = int(attr.Value.AsInt64())
+		}
+	}
+	if got != 500 {
+		t.Errorf("expected span http.status_code=500 (Recoverer wrote 500 inside otelhttp), got %d. Attrs: %v", got, spans[0].Attributes)
+	}
+}
+
 func TestHTTPMiddleware_NilLogger(t *testing.T) {
 	resetForTest()
 	r := chi.NewRouter()

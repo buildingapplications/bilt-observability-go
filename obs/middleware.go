@@ -36,8 +36,13 @@ type MiddlewareOptions struct {
 }
 
 // HTTPMiddleware returns the canonical chi middleware stack:
-// RequestID -> RealIP -> Recoverer -> otelhttp -> chi route attribute ->
+// RequestID -> RealIP -> otelhttp -> Recoverer -> chi route attribute ->
 // context enrichment -> access log. Paths in SkipPaths bypass otelhttp + log.
+//
+// Recoverer runs INSIDE otelhttp so panic-recovered 500 responses are visible
+// on the otel span (otelhttp's deferred span end captures the 500 status that
+// Recoverer just wrote). If Recoverer were outside otelhttp, the span would
+// close before Recoverer wrote 500, losing panic attribution in tracing UIs.
 func HTTPMiddleware(lg *zap.SugaredLogger, opts MiddlewareOptions) func(http.Handler) http.Handler {
 	skip := opts.SkipPaths
 	if len(skip) == 0 {
@@ -63,8 +68,8 @@ func HTTPMiddleware(lg *zap.SugaredLogger, opts MiddlewareOptions) func(http.Han
 			stack = handlerErrorSlot(stack)
 		}
 		stack = chiRouteAttr()(stack)
-		stack = otelWithSkip(serverName, skipSet)(stack)
 		stack = chimiddleware.Recoverer(stack)
+		stack = otelWithSkip(serverName, skipSet)(stack)
 		stack = chimiddleware.RealIP(stack)
 		stack = chimiddleware.RequestID(stack)
 		return stack
