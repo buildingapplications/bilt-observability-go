@@ -204,11 +204,11 @@ func buildTracerProvider(ctx context.Context, cfg *Config, res *resource.Resourc
 	for _, sp := range cfg.ExtraSpanProcessors {
 		tpOpts = append(tpOpts, sdktrace.WithSpanProcessor(sp))
 	}
-	if cfg.Sampler != nil {
-		tpOpts = append(tpOpts, sdktrace.WithSampler(cfg.Sampler))
-	} else {
-		tpOpts = append(tpOpts, sdktrace.WithSampler(sdktrace.ParentBased(sdktrace.AlwaysSample())))
+	base := cfg.Sampler
+	if base == nil {
+		base = sdktrace.ParentBased(sdktrace.AlwaysSample())
 	}
+	tpOpts = append(tpOpts, sdktrace.WithSampler(&redisNoiseSampler{base: base}))
 
 	tp := sdktrace.NewTracerProvider(tpOpts...)
 	return tp, tp.Shutdown, nil
