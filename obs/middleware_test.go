@@ -1,52 +1,43 @@
 package obs
 
 import (
-	"context"
 	"net/http"
 	"net/http/httptest"
-	"strings"
-	"sync"
 	"testing"
 
 	"github.com/go-chi/chi/v5"
 	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
+	"go.opentelemetry.io/otel/trace"
 	"go.uber.org/zap"
 )
 
-type captureSink struct {
-	mu      sync.Mutex
-	entries []string
+func newTestTracer(t *testing.T) *tracetest.InMemoryExporter {
+	t.Helper()
+	exporter := tracetest.NewInMemoryExporter()
+	tp := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(sdktrace.NewSimpleSpanProcessor(exporter)))
+	otel.SetTracerProvider(tp)
+	t.Cleanup(func() { _ = tp.Shutdown(t.Context()) })
+	return exporter
 }
 
-func (c *captureSink) Write(p []byte) (int, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.entries = append(c.entries, string(p))
-	return len(p), nil
-}
-func (c *captureSink) Sync() error { return nil }
-func (c *captureSink) lines() []string {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	out := make([]string, len(c.entries))
-	copy(out, c.entries)
-	return out
+func attrString(attrs []attribute.KeyValue, key string) (string, bool) {
+	for _, a := range attrs {
+		if string(a.Key) == key {
+			return a.Value.AsString(), true
+		}
+	}
+	return "", false
 }
 
 func TestHTTPMiddleware_HealthSkipped(t *testing.T) {
 	resetForTest()
-	sink := &captureSink{}
-	lg := newCapturedLogger(sink)
-
-	exporter := tracetest.NewInMemoryExporter()
-	tp := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(sdktrace.NewSimpleSpanProcessor(exporter)))
-	otel.SetTracerProvider(tp)
-	defer func() { _ = tp.Shutdown(t.Context()) }()
+	exporter := newTestTracer(t)
 
 	r := chi.NewRouter()
-	r.Use(HTTPMiddleware(lg, MiddlewareOptions{}))
+	r.Use(HTTPMiddleware(zap.NewNop().Sugar(), MiddlewareOptions{}))
 	r.Get("/health", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(204) })
 	r.Get("/api/things", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(200) })
 
@@ -60,32 +51,11 @@ func TestHTTPMiddleware_HealthSkipped(t *testing.T) {
 	if len(gotSpans) != 1 {
 		t.Errorf("expected 1 span (health skipped), got %d", len(gotSpans))
 	}
-
-	logs := sink.lines()
-	hasHealth := false
-	hasThings := false
-	for _, l := range logs {
-		if strings.Contains(l, "/health") {
-			hasHealth = true
-		}
-		if strings.Contains(l, "/api/things") {
-			hasThings = true
-		}
-	}
-	if hasHealth {
-		t.Error("/health should not be logged")
-	}
-	if !hasThings {
-		t.Error("/api/things should be logged")
-	}
 }
 
 func TestHTTPMiddleware_RouteAttribute(t *testing.T) {
 	resetForTest()
-	exporter := tracetest.NewInMemoryExporter()
-	tp := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(sdktrace.NewSimpleSpanProcessor(exporter)))
-	otel.SetTracerProvider(tp)
-	defer func() { _ = tp.Shutdown(t.Context()) }()
+	exporter := newTestTracer(t)
 
 	r := chi.NewRouter()
 	r.Use(HTTPMiddleware(zap.NewNop().Sugar(), MiddlewareOptions{SkipPaths: []string{}}))
@@ -93,69 +63,28 @@ func TestHTTPMiddleware_RouteAttribute(t *testing.T) {
 
 	srv := httptest.NewServer(r)
 	defer srv.Close()
-
 	httpGet(t, srv.URL+"/users/42")
 
 	spans := exporter.GetSpans()
 	if len(spans) == 0 {
 		t.Fatal("no spans recorded")
 	}
-	found := false
-	for _, attr := range spans[0].Attributes {
-		if string(attr.Key) == "http.route" && attr.Value.AsString() == "/users/{id}" {
-			found = true
-			break
-		}
-	}
-	if !found {
-		t.Errorf("http.route attribute missing or wrong: %v", spans[0].Attributes)
-	}
-}
-
-func TestHTTPMiddleware_LogStatusBuckets(t *testing.T) {
-	resetForTest()
-	sink := &captureSink{}
-	lg := newCapturedLogger(sink)
-
-	r := chi.NewRouter()
-	r.Use(HTTPMiddleware(lg, MiddlewareOptions{SkipPaths: []string{}}))
-	r.Get("/ok", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(200) })
-	r.Get("/bad", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(400) })
-	r.Get("/err", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(500) })
-
-	srv := httptest.NewServer(r)
-	defer srv.Close()
-
-	httpGet(t, srv.URL+"/ok")
-	httpGet(t, srv.URL+"/bad")
-	httpGet(t, srv.URL+"/err")
-
-	out := strings.Join(sink.lines(), "\n")
-	if !strings.Contains(out, `"level":"info"`) {
-		t.Error("missing info-level log")
-	}
-	if !strings.Contains(out, `"level":"warn"`) {
-		t.Error("missing warn-level log")
-	}
-	if !strings.Contains(out, `"level":"error"`) {
-		t.Error("missing error-level log")
+	got, _ := attrString(spans[0].Attributes, "http.route")
+	if got != "/users/{id}" {
+		t.Errorf("http.route: got %q want /users/{id}", got)
 	}
 }
 
 func TestHTTPMiddleware_RequestIDPropagated(t *testing.T) {
 	resetForTest()
-	sink := &captureSink{}
-	lg := newCapturedLogger(sink)
-
 	r := chi.NewRouter()
-	r.Use(HTTPMiddleware(lg, MiddlewareOptions{SkipPaths: []string{}}))
+	r.Use(HTTPMiddleware(zap.NewNop().Sugar(), MiddlewareOptions{SkipPaths: []string{}}))
 	r.Get("/x", func(w http.ResponseWriter, r *http.Request) {
 		if RequestIDFromContext(r.Context()) == "" {
 			t.Error("expected request_id in handler context")
 		}
 		w.WriteHeader(200)
 	})
-
 	srv := httptest.NewServer(r)
 	defer srv.Close()
 	httpGet(t, srv.URL+"/x")
@@ -163,16 +92,11 @@ func TestHTTPMiddleware_RequestIDPropagated(t *testing.T) {
 
 func TestHTTPMiddleware_PanicRecoveredWith500SpanStatus(t *testing.T) {
 	resetForTest()
-	exporter := tracetest.NewInMemoryExporter()
-	tp := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(sdktrace.NewSimpleSpanProcessor(exporter)))
-	otel.SetTracerProvider(tp)
-	defer func() { _ = tp.Shutdown(t.Context()) }()
+	exporter := newTestTracer(t)
 
 	r := chi.NewRouter()
 	r.Use(HTTPMiddleware(zap.NewNop().Sugar(), MiddlewareOptions{SkipPaths: []string{}}))
-	r.Get("/boom", func(w http.ResponseWriter, r *http.Request) {
-		panic("test panic")
-	})
+	r.Get("/boom", func(w http.ResponseWriter, r *http.Request) { panic("test panic") })
 
 	srv := httptest.NewServer(r)
 	defer srv.Close()
@@ -200,7 +124,7 @@ func TestHTTPMiddleware_PanicRecoveredWith500SpanStatus(t *testing.T) {
 		}
 	}
 	if got != 500 {
-		t.Errorf("expected span http.status_code=500 (Recoverer wrote 500 inside otelhttp), got %d. Attrs: %v", got, spans[0].Attributes)
+		t.Errorf("expected span http.status_code=500, got %d. Attrs: %v", got, spans[0].Attributes)
 	}
 }
 
@@ -214,60 +138,38 @@ func TestHTTPMiddleware_NilLogger(t *testing.T) {
 	httpGet(t, srv.URL+"/x")
 }
 
-func TestHTTPMiddleware_EnrichLogFields(t *testing.T) {
+// Direct span.SetAttributes from handler — the documented way to attach
+// per-request span attrs. No lib hook needed.
+func TestHTTPMiddleware_HandlerSetsSpanAttrs(t *testing.T) {
 	resetForTest()
-	sink := &captureSink{}
-	lg := newCapturedLogger(sink)
-
-	type errKey struct{}
-	enrich := func(ctx context.Context, status int) []any {
-		if status >= 400 {
-			if msg, _ := ctx.Value(errKey{}).(string); msg != "" {
-				return []any{"error", msg}
-			}
-		}
-		return nil
-	}
+	exporter := newTestTracer(t)
 
 	r := chi.NewRouter()
-	r.Use(HTTPMiddleware(lg, MiddlewareOptions{
-		SkipPaths:       []string{},
-		EnrichLogFields: enrich,
-	}))
-	r.Get("/ok", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(200) })
-	r.Get("/bad", func(w http.ResponseWriter, r *http.Request) {
-		*r = *r.WithContext(context.WithValue(r.Context(), errKey{}, "boom"))
-		w.WriteHeader(500)
+	r.Use(HTTPMiddleware(zap.NewNop().Sugar(), MiddlewareOptions{SkipPaths: []string{}}))
+	r.Get("/users/{id}", func(w http.ResponseWriter, r *http.Request) {
+		trace.SpanFromContext(r.Context()).SetAttributes(
+			attribute.String("auth.principal_id", "user-7"),
+			attribute.String("tenant.id", "t-42"),
+		)
+		w.WriteHeader(200)
 	})
 
 	srv := httptest.NewServer(r)
 	defer srv.Close()
-	httpGet(t, srv.URL+"/ok")
-	httpGet(t, srv.URL+"/bad")
+	httpGet(t, srv.URL+"/users/abc")
 
-	out := strings.Join(sink.lines(), "\n")
-	if strings.Contains(out, `"error":"boom"`) == false {
-		t.Errorf("expected error field on 500: %s", out)
+	spans := exporter.GetSpans()
+	if len(spans) != 1 {
+		t.Fatalf("expected 1 span, got %d", len(spans))
 	}
-	// 200 path should not carry error field
-	for _, line := range sink.lines() {
-		if strings.Contains(line, "/ok") && strings.Contains(line, `"error":`) {
-			t.Errorf("/ok line should not have error: %s", line)
-		}
+	pid, _ := attrString(spans[0].Attributes, "auth.principal_id")
+	if pid != "user-7" {
+		t.Errorf("auth.principal_id: got %q want user-7", pid)
 	}
-}
-
-func TestHTTPMiddleware_EnrichLogFields_NilSafe(t *testing.T) {
-	resetForTest()
-	r := chi.NewRouter()
-	r.Use(HTTPMiddleware(zap.NewNop().Sugar(), MiddlewareOptions{
-		SkipPaths:       []string{},
-		EnrichLogFields: nil,
-	}))
-	r.Get("/x", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(200) })
-	srv := httptest.NewServer(r)
-	defer srv.Close()
-	httpGet(t, srv.URL+"/x")
+	tid, _ := attrString(spans[0].Attributes, "tenant.id")
+	if tid != "t-42" {
+		t.Errorf("tenant.id: got %q want t-42", tid)
+	}
 }
 
 func httpGet(t *testing.T, url string) {
