@@ -84,7 +84,7 @@ func otelWithSkip(serverName string, skip map[string]struct{}) func(http.Handler
 // handler runs, allocates the handler-error slot, and on the way out:
 //   - sets http.route from chi RouteContext
 //   - promotes SetHandlerError(msg) onto the span (RecordError + Error status
-//     + bilt.handler_error attribute) when status >= 400 and msg is non-empty
+//   - bilt.handler_error attribute) when status >= 400 and msg is non-empty
 func captureErrorAndRoute() func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
