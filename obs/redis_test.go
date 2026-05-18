@@ -77,7 +77,7 @@ func TestConsumerSpan_Kind(t *testing.T) {
 	if spans[0].SpanKind != trace.SpanKindConsumer {
 		t.Errorf("expected consumer kind, got %v", spans[0].SpanKind)
 	}
-	if spans[0].Name != "redis.receive stream-x" {
+	if spans[0].Name != "redis.receive" {
 		t.Errorf("name: got %s", spans[0].Name)
 	}
 	hasDest := false

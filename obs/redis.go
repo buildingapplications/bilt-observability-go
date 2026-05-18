@@ -61,11 +61,10 @@ func ConsumerSpan(ctx context.Context, opts ConsumerOpts) (context.Context, trac
 	}
 	attrs = append(attrs, opts.Attrs...)
 
-	name := "redis.receive"
-	if opts.Destination != "" {
-		name = "redis.receive " + opts.Destination
-	}
-	return otel.Tracer("obs.redis").Start(ctx, name,
+	// Span name is kept static — the destination (a per-session stream key
+	// with a UUID) goes only to the messaging.destination.name attribute, so
+	// it never inflates operation cardinality in spanmetrics.
+	return otel.Tracer("obs.redis").Start(ctx, "redis.receive",
 		trace.WithSpanKind(trace.SpanKindConsumer),
 		trace.WithAttributes(attrs...),
 	)
@@ -82,23 +81,18 @@ func ProducerSpan(ctx context.Context, opts ProducerOpts) (context.Context, trac
 	}
 	attrs = append(attrs, opts.Attrs...)
 
-	name := "redis.publish"
-	if opts.Destination != "" {
-		name = "redis.publish " + opts.Destination
-	}
-	return otel.Tracer("obs.redis").Start(ctx, name,
+	return otel.Tracer("obs.redis").Start(ctx, "redis.publish",
 		trace.WithSpanKind(trace.SpanKindProducer),
 		trace.WithAttributes(attrs...),
 	)
 }
 
-// WrapRedisClient instruments client with redisotel metrics + tracing.
+// WrapRedisClient instruments client with redisotel metrics. Per-command trace
+// spans are intentionally not enabled: they are high-volume leaf spans with no
+// debugging value. Redis command latency is covered by the metrics instrumentation.
 func WrapRedisClient(client *redis.Client) error {
 	if err := redisotel.InstrumentMetrics(client); err != nil {
 		return fmt.Errorf("redis metrics: %w", err)
-	}
-	if err := redisotel.InstrumentTracing(client); err != nil {
-		return fmt.Errorf("redis tracing: %w", err)
 	}
 	return nil
 }
