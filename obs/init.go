@@ -44,6 +44,13 @@ type Config struct {
 	ExtraResourceAttrs  []attribute.KeyValue
 	BSPOptions          *BSPOptions
 	HealthPaths         []string
+
+	// ContextFields, if set, is invoked by Log / LoggerFromContext to pull
+	// service-specific structured fields off ctx (e.g. workflowId, projectId)
+	// and merge them onto the returned logger. Return key/value pairs; omit
+	// absent values. Keeps obs generic: callers register their own context keys
+	// without obs importing their packages.
+	ContextFields func(ctx context.Context) []any
 }
 
 const (
@@ -55,11 +62,12 @@ const (
 )
 
 var (
-	initMu       sync.Mutex
-	initialized  bool
-	cachedShut   Shutdown
-	cachedLogger *zap.SugaredLogger
-	cachedHealth []string
+	initMu              sync.Mutex
+	initialized         bool
+	cachedShut          Shutdown
+	cachedLogger        *zap.SugaredLogger
+	cachedHealth        []string
+	cachedContextFields func(context.Context) []any
 )
 
 // Init wires global TracerProvider, MeterProvider, propagators, runtime metrics,
@@ -84,6 +92,7 @@ func Init(ctx context.Context, cfg *Config) (Shutdown, error) {
 	if v := os.Getenv(disableEnv); v == "1" || v == "true" {
 		cachedLogger = buildLogger(cfg.ServiceName, cfg.LogLevel)
 		cachedHealth = resolveHealthPaths(cfg.HealthPaths)
+		cachedContextFields = cfg.ContextFields
 		cachedShut = func(context.Context) error { return nil }
 		initialized = true
 		return cachedShut, nil
@@ -120,6 +129,7 @@ func Init(ctx context.Context, cfg *Config) (Shutdown, error) {
 
 	cachedLogger = buildLogger(cfg.ServiceName, cfg.LogLevel)
 	cachedHealth = resolveHealthPaths(cfg.HealthPaths)
+	cachedContextFields = cfg.ContextFields
 
 	cachedShut = func(ctx context.Context) error {
 		var errs []error
@@ -260,4 +270,5 @@ func resetForTest() {
 	cachedShut = nil
 	cachedLogger = nil
 	cachedHealth = nil
+	cachedContextFields = nil
 }

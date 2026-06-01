@@ -135,6 +135,55 @@ func TestWithLogger_Roundtrip(t *testing.T) {
 	}
 }
 
+func bufLogger() (*bytes.Buffer, *zap.SugaredLogger) {
+	var buf bytes.Buffer
+	core := zapcore.NewCore(
+		zapcore.NewJSONEncoder(zapcore.EncoderConfig{MessageKey: "msg", LevelKey: "level", EncodeLevel: zapcore.LowercaseLevelEncoder}),
+		zapcore.AddSync(&buf), zap.InfoLevel,
+	)
+	return &buf, zap.New(core).Sugar()
+}
+
+func TestLoggerFromContext_PackageLoggerFallback(t *testing.T) {
+	resetForTest()
+	defer resetForTest()
+	buf, lg := bufLogger()
+	cachedLogger = lg
+
+	// ctx carries no logger and fallback is nil: must route to the package
+	// logger, not a no-op, so a wanted line is never silently dropped.
+	LoggerFromContext(context.Background(), nil).Infow("emitted")
+	if !strings.Contains(buf.String(), `"emitted"`) {
+		t.Errorf("expected package-logger fallback to emit, got %q", buf.String())
+	}
+}
+
+func TestLog_RoutesThroughContext(t *testing.T) {
+	resetForTest()
+	defer resetForTest()
+	buf, lg := bufLogger()
+	ctx := WithLogger(context.Background(), lg)
+	Log(ctx).Infow("via-log")
+	if !strings.Contains(buf.String(), `"via-log"`) {
+		t.Errorf("Log(ctx) did not use ctx logger, got %q", buf.String())
+	}
+}
+
+func TestLoggerFromContext_ContextFieldsMerged(t *testing.T) {
+	resetForTest()
+	defer resetForTest()
+	cachedContextFields = func(context.Context) []any {
+		return []any{"workflowId", "wf-1", "projectId", "proj-2"}
+	}
+	buf, lg := bufLogger()
+	ctx := WithLogger(context.Background(), lg)
+	Log(ctx).Infow("hi")
+	out := buf.String()
+	if !strings.Contains(out, `"workflowId":"wf-1"`) || !strings.Contains(out, `"projectId":"proj-2"`) {
+		t.Errorf("context fields not merged: %s", out)
+	}
+}
+
 func TestSpanContextRemote_TraceFlags(t *testing.T) {
 	cfg := trace.SpanContextConfig{TraceFlags: trace.FlagsSampled}
 	sc := trace.NewSpanContext(cfg)
