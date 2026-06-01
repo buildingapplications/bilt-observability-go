@@ -60,8 +60,9 @@ func main() {
 
 ```go
 obs.Init(ctx, *Config) (Shutdown, error)
-obs.Logger(serviceName) *zap.SugaredLogger
-obs.LoggerFromContext(ctx, fallback) *zap.SugaredLogger
+obs.Logger(serviceName) *zap.SugaredLogger               // package logger (no ctx)
+obs.Log(ctx) *zap.SugaredLogger                          // request-scoped; falls back to the package logger
+obs.LoggerFromContext(ctx, fallback) *zap.SugaredLogger  // Log(ctx) with an explicit fallback
 obs.WithRequestID(ctx, id) context.Context
 obs.RequestIDFromContext(ctx) string
 obs.HTTPMiddleware(lg, MiddlewareOptions) func(http.Handler) http.Handler
@@ -80,6 +81,23 @@ obs.ConsumerSpan(ctx, ConsumerOpts) (ctx, span)
 obs.ProducerSpan(ctx, ProducerOpts) (ctx, span)
 obs.WrapRedisClient(*redis.Client) error
 ```
+
+## Context fields
+
+`Log(ctx)` / `LoggerFromContext` always merge `request_id`, `trace_id`, and
+`span_id` off ctx. To also merge service-specific fields (e.g. `workflowId`,
+`projectId`), set `Config.ContextFields` — it is called per log with ctx and
+returns key/value pairs:
+
+```go
+obs.Init(ctx, &obs.Config{
+    ServiceName:   "bilt-agent",
+    ContextFields: common.LogFields, // func(ctx) []any
+})
+```
+
+This keeps obs generic: each service registers its own context keys without obs
+importing their packages.
 
 ## Killswitch
 

@@ -28,13 +28,28 @@ func Logger(serviceName string) *zap.SugaredLogger {
 	return buildLogger(serviceName, os.Getenv("LOG_LEVEL"))
 }
 
-// LoggerFromContext returns the request-scoped logger from ctx, falling back
-// to fallback (or a no-op logger if both are nil). Trace ID, span ID, and
-// request ID from ctx are auto-merged onto the returned logger.
+// Log returns the request-scoped logger on ctx — the everyday accessor.
+// Equivalent to LoggerFromContext(ctx, nil): the logger stored on ctx (via
+// WithLogger / HTTPMiddleware), enriched with request/trace/span IDs and any
+// fields from a registered Config.ContextFields, falling back to the package
+// logger when ctx carries none. In a live process (post-Init) it never returns
+// a no-op, so a log you wrote is never silently dropped.
+func Log(ctx context.Context) *zap.SugaredLogger {
+	return LoggerFromContext(ctx, nil)
+}
+
+// LoggerFromContext returns the request-scoped logger from ctx, falling back to
+// fallback, then the package logger, then a no-op logger (the no-op is only
+// reachable before Init). Request ID, trace ID, span ID, and any fields from a
+// registered Config.ContextFields are auto-merged onto the returned logger.
+// Prefer Log(ctx) unless you need to supply a custom fallback.
 func LoggerFromContext(ctx context.Context, fallback *zap.SugaredLogger) *zap.SugaredLogger {
 	lg := fallback
 	if v, ok := ctx.Value(loggerKey).(*zap.SugaredLogger); ok && v != nil {
 		lg = v
+	}
+	if lg == nil {
+		lg = cachedLogger
 	}
 	if lg == nil {
 		lg = zap.NewNop().Sugar()
@@ -47,6 +62,11 @@ func LoggerFromContext(ctx context.Context, fallback *zap.SugaredLogger) *zap.Su
 		lg = lg.With("trace_id", sc.TraceID().String())
 		if sc.HasSpanID() {
 			lg = lg.With("span_id", sc.SpanID().String())
+		}
+	}
+	if cachedContextFields != nil {
+		if kv := cachedContextFields(ctx); len(kv) > 0 {
+			lg = lg.With(kv...)
 		}
 	}
 	return lg
