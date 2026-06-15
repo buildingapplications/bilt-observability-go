@@ -58,7 +58,8 @@ const (
 	defaultMaxExportBatchSize = 1024
 	defaultScheduledDelay     = 2 * time.Second
 
-	disableEnv = "BILT_OBS_DISABLE"
+	disableEnv     = "BILT_OBS_DISABLE"
+	environmentEnv = "BILT_OBS_ENVIRONMENT"
 )
 
 var (
@@ -167,10 +168,14 @@ func buildResource(ctx context.Context, cfg *Config) (*resource.Resource, error)
 	attrs := []attribute.KeyValue{
 		semconv.ServiceName(cfg.ServiceName),
 	}
-	if cfg.Environment != "" {
+	env := cfg.Environment
+	if v := os.Getenv(environmentEnv); v != "" {
+		env = v
+	}
+	if env != "" {
 		attrs = append(attrs,
-			semconv.DeploymentEnvironmentName(cfg.Environment),
-			attribute.String("service.namespace", cfg.Environment),
+			semconv.DeploymentEnvironmentName(env),
+			attribute.String("service.namespace", env),
 		)
 	}
 	attrs = append(attrs, cfg.ExtraResourceAttrs...)
