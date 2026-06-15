@@ -4,6 +4,9 @@ import (
 	"context"
 	"reflect"
 	"testing"
+
+	"go.opentelemetry.io/otel/sdk/resource"
+	semconv "go.opentelemetry.io/otel/semconv/v1.40.0"
 )
 
 func TestInit_RequiresServiceName(t *testing.T) {
@@ -117,4 +120,41 @@ func TestResolveHealthPaths_EmptyFallsBack(t *testing.T) {
 	if len(got) != len(DefaultHealthPaths()) {
 		t.Errorf("expected default paths, got %v", got)
 	}
+}
+
+func TestBuildResource_EnvironmentOverride(t *testing.T) {
+	envKey := string(semconv.DeploymentEnvironmentName("").Key)
+
+	t.Run("override wins over config", func(t *testing.T) {
+		t.Setenv(environmentEnv, "dev-rait")
+		res, err := buildResource(context.Background(), &Config{ServiceName: "svc", Environment: "production"})
+		if err != nil {
+			t.Fatalf("buildResource: %v", err)
+		}
+		if got := resourceAttr(res, envKey); got != "dev-rait" {
+			t.Errorf("deployment.environment: got %q want dev-rait", got)
+		}
+		if got := resourceAttr(res, "service.namespace"); got != "dev-rait" {
+			t.Errorf("service.namespace: got %q want dev-rait", got)
+		}
+	})
+
+	t.Run("config used when override unset", func(t *testing.T) {
+		res, err := buildResource(context.Background(), &Config{ServiceName: "svc", Environment: "production"})
+		if err != nil {
+			t.Fatalf("buildResource: %v", err)
+		}
+		if got := resourceAttr(res, envKey); got != "production" {
+			t.Errorf("deployment.environment: got %q want production", got)
+		}
+	})
+}
+
+func resourceAttr(res *resource.Resource, key string) string {
+	for _, kv := range res.Attributes() {
+		if string(kv.Key) == key {
+			return kv.Value.AsString()
+		}
+	}
+	return ""
 }

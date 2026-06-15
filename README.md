@@ -104,6 +104,13 @@ importing their packages.
 Set `BILT_OBS_DISABLE=1` (or `true`) to make `Init` return a no-op shutdown
 without touching OTel globals. Logger still works.
 
+## Environment override
+
+Set `BILT_OBS_ENVIRONMENT` to override `Config.Environment` for the
+`deployment.environment` / `service.namespace` resource attributes. Lets a
+launcher (e.g. the dev TUI) retag telemetry per developer without changing the
+service's own config.
+
 ## Defaults
 
 - BSP: 8192 queue / 1024 batch / 2s flush (matches `@biltme/otel`)
