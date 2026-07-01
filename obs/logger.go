@@ -21,6 +21,9 @@ const (
 // Logger returns the package-level logger for serviceName. After Init has run,
 // returns the cached logger. Before Init, builds a fresh one (useful in tests
 // or pre-init bootstrap).
+//
+// Bootstrap/test use only. Request- and workflow-path code should use Log(ctx)
+// instead: the package logger carries no span, so its lines are not trace-linked.
 func Logger(serviceName string) *zap.SugaredLogger {
 	if cachedLogger != nil {
 		return cachedLogger
