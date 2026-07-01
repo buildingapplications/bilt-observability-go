@@ -98,6 +98,70 @@ func TestConsumerSpan_Kind(t *testing.T) {
 	}
 }
 
+func consumerSpanStub(t *testing.T, stubs tracetest.SpanStubs) tracetest.SpanStub {
+	t.Helper()
+	for _, s := range stubs {
+		if s.Name == "redis.receive" {
+			return s
+		}
+	}
+	t.Fatal("no redis.receive span recorded")
+	return tracetest.SpanStub{}
+}
+
+func TestConsumerSpan_DefaultNewRootLinksProducer(t *testing.T) {
+	exporter := tracetest.NewInMemoryExporter()
+	tp := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(sdktrace.NewSimpleSpanProcessor(exporter)))
+	otel.SetTracerProvider(tp)
+	defer func() { _ = tp.Shutdown(context.Background()) }()
+
+	pctx, pspan := ProducerSpan(context.Background(), ProducerOpts{Destination: "stream-x"})
+	remote := pspan.SpanContext()
+	pspan.End()
+
+	ctx := ExtractTraceContext(context.Background(), InjectTraceContext(pctx))
+	_, cspan := ConsumerSpan(ctx, ConsumerOpts{Destination: "stream-x", ConsumerGroup: "g1"})
+	cspan.End()
+
+	cs := consumerSpanStub(t, exporter.GetSpans())
+	if cs.SpanContext.TraceID() == remote.TraceID() {
+		t.Errorf("expected a new-root trace, got producer trace id %s", remote.TraceID())
+	}
+	if len(cs.Links) != 1 {
+		t.Fatalf("expected exactly 1 link, got %d", len(cs.Links))
+	}
+	if link := cs.Links[0].SpanContext; link.TraceID() != remote.TraceID() || link.SpanID() != remote.SpanID() {
+		t.Errorf("link does not point at producer: got %s/%s want %s/%s",
+			link.TraceID(), link.SpanID(), remote.TraceID(), remote.SpanID())
+	}
+}
+
+func TestConsumerSpan_ParentChildOptIn(t *testing.T) {
+	exporter := tracetest.NewInMemoryExporter()
+	tp := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(sdktrace.NewSimpleSpanProcessor(exporter)))
+	otel.SetTracerProvider(tp)
+	defer func() { _ = tp.Shutdown(context.Background()) }()
+
+	pctx, pspan := ProducerSpan(context.Background(), ProducerOpts{Destination: "stream-x"})
+	remote := pspan.SpanContext()
+	pspan.End()
+
+	ctx := ExtractTraceContext(context.Background(), InjectTraceContext(pctx))
+	_, cspan := ConsumerSpan(ctx, ConsumerOpts{Destination: "stream-x", ParentChild: true})
+	cspan.End()
+
+	cs := consumerSpanStub(t, exporter.GetSpans())
+	if cs.SpanContext.TraceID() != remote.TraceID() {
+		t.Errorf("expected child of remote parent (trace id %s), got %s", remote.TraceID(), cs.SpanContext.TraceID())
+	}
+	if cs.Parent.SpanID() != remote.SpanID() {
+		t.Errorf("expected parent span id %s, got %s", remote.SpanID(), cs.Parent.SpanID())
+	}
+	if len(cs.Links) != 0 {
+		t.Errorf("expected no links in parent-child mode, got %d", len(cs.Links))
+	}
+}
+
 func TestProducerSpan_Kind(t *testing.T) {
 	exporter := tracetest.NewInMemoryExporter()
 	tp := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(sdktrace.NewSimpleSpanProcessor(exporter)))

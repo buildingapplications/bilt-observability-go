@@ -96,6 +96,9 @@ func captureErrorAndRoute() func(http.Handler) http.Handler {
 			if rctx := chi.RouteContext(ctx); rctx != nil {
 				if pattern := rctx.RoutePattern(); pattern != "" {
 					span.SetAttributes(attribute.String("http.route", pattern))
+					// Rename the otelhttp server span from the static ServerName
+					// to the templated route so spanmetrics yield per-route RED.
+					span.SetName(r.Method + " " + pattern)
 				}
 			}
 			if ww.Status() >= 400 {

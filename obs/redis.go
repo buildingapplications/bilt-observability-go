@@ -18,6 +18,9 @@ type ConsumerOpts struct {
 	Destination   string
 	ConsumerGroup string
 	Attrs         []attribute.KeyValue
+	// ParentChild opts back into remote parent-child; default false =
+	// new-root span linking back to the producer.
+	ParentChild bool
 }
 
 // ProducerOpts configures a Redis producer span.
@@ -64,10 +67,18 @@ func ConsumerSpan(ctx context.Context, opts ConsumerOpts) (context.Context, trac
 	// Span name is kept static — the destination (a per-session stream key
 	// with a UUID) goes only to the messaging.destination.name attribute, so
 	// it never inflates operation cardinality in spanmetrics.
-	return otel.Tracer("obs.redis").Start(ctx, "redis.receive",
+	startOpts := []trace.SpanStartOption{
 		trace.WithSpanKind(trace.SpanKindConsumer),
 		trace.WithAttributes(attrs...),
-	)
+	}
+	// Default: each consumed message is its own trace that links back to the
+	// producer, so a long-lived stream does not nest into one giant trace.
+	if !opts.ParentChild {
+		if link := trace.SpanContextFromContext(ctx); link.IsValid() {
+			startOpts = append(startOpts, trace.WithNewRoot(), trace.WithLinks(trace.Link{SpanContext: link}))
+		}
+	}
+	return otel.Tracer("obs.redis").Start(ctx, "redis.receive", startOpts...)
 }
 
 // ProducerSpan starts a PRODUCER-kind span attributed to a Redis stream.

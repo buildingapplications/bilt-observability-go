@@ -75,6 +75,27 @@ func TestHTTPMiddleware_RouteAttribute(t *testing.T) {
 	}
 }
 
+func TestHTTPMiddleware_SpanNamedFromRoute(t *testing.T) {
+	resetForTest()
+	exporter := newTestTracer(t)
+
+	r := chi.NewRouter()
+	r.Use(HTTPMiddleware(zap.NewNop().Sugar(), MiddlewareOptions{SkipPaths: []string{}}))
+	r.Get("/users/{id}", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(200) })
+
+	srv := httptest.NewServer(r)
+	defer srv.Close()
+	httpGet(t, srv.URL+"/users/42")
+
+	spans := exporter.GetSpans()
+	if len(spans) == 0 {
+		t.Fatal("no spans recorded")
+	}
+	if spans[0].Name != "GET /users/{id}" {
+		t.Errorf("span name: got %q want %q", spans[0].Name, "GET /users/{id}")
+	}
+}
+
 func TestHTTPMiddleware_RequestIDPropagated(t *testing.T) {
 	resetForTest()
 	r := chi.NewRouter()
