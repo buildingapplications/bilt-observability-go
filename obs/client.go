@@ -14,11 +14,17 @@ func HTTPClient(base *http.Client) *http.Client {
 		c := *http.DefaultClient
 		base = &c
 	}
-	inner := base.Transport
-	if inner == nil {
-		inner = http.DefaultTransport
-	}
 	out := *base
-	out.Transport = otelhttp.NewTransport(inner)
+	out.Transport = HTTPTransport(base.Transport)
 	return &out
+}
+
+// HTTPTransport is the RoundTripper-level equivalent of HTTPClient, for
+// consumers that take a transport rather than a client (httputil.ReverseProxy,
+// SDK transport slots). If base is nil, http.DefaultTransport is wrapped.
+func HTTPTransport(base http.RoundTripper) http.RoundTripper {
+	if base == nil {
+		base = http.DefaultTransport
+	}
+	return otelhttp.NewTransport(base)
 }

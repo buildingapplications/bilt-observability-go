@@ -72,3 +72,39 @@ func TestHTTPClient_InjectsTraceparent(t *testing.T) {
 type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+func TestHTTPTransport_NilBase(t *testing.T) {
+	if HTTPTransport(nil) == nil {
+		t.Fatal("expected non-nil transport")
+	}
+}
+
+func TestHTTPTransport_InjectsTraceparent(t *testing.T) {
+	exporter := tracetest.NewInMemoryExporter()
+	tp := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(sdktrace.NewSimpleSpanProcessor(exporter)))
+	otel.SetTracerProvider(tp)
+	defer func() { _ = tp.Shutdown(context.Background()) }()
+	otel.SetTextMapPropagator(compositePropagator())
+
+	gotHeader := ""
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotHeader = r.Header.Get("traceparent")
+		w.WriteHeader(200)
+	}))
+	defer srv.Close()
+
+	tracer := tp.Tracer("test")
+	ctx, span := tracer.Start(context.Background(), "outbound")
+	defer span.End()
+
+	rt := HTTPTransport(nil)
+	req, _ := http.NewRequestWithContext(ctx, "GET", srv.URL, nil)
+	res, err := rt.RoundTrip(req)
+	if err != nil {
+		t.Fatalf("roundtrip: %v", err)
+	}
+	_ = res.Body.Close()
+	if gotHeader == "" {
+		t.Error("traceparent not injected")
+	}
+}
