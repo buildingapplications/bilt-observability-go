@@ -108,3 +108,50 @@ func TestHTTPTransport_InjectsTraceparent(t *testing.T) {
 		t.Error("traceparent not injected")
 	}
 }
+
+func TestClientSpanName(t *testing.T) {
+	cases := map[string]string{
+		"https://bedrock-runtime.eu-north-1.amazonaws.com/model/anthropic.claude/converse-stream": "POST bedrock-runtime.eu-north-1.amazonaws.com",
+		"http://tokens:8080/api/v1/usage": "POST tokens", // port belongs on server.port, not the name
+		"https://mcp.context7.com/mcp":    "POST mcp.context7.com",
+	}
+	for rawURL, want := range cases {
+		req, err := http.NewRequest(http.MethodPost, rawURL, nil)
+		if err != nil {
+			t.Fatalf("NewRequest(%q): %v", rawURL, err)
+		}
+		if got := clientSpanName("", req); got != want {
+			t.Errorf("clientSpanName(%q) = %q, want %q", rawURL, got, want)
+		}
+	}
+}
+
+// The recorded span name, not just the formatter, is what dashboards group on.
+func TestHTTPTransport_NamesSpanByHost(t *testing.T) {
+	exporter := tracetest.NewInMemoryExporter()
+	tp := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(sdktrace.NewSimpleSpanProcessor(exporter)))
+	otel.SetTracerProvider(tp)
+	defer func() { _ = tp.Shutdown(context.Background()) }()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(200)
+	}))
+	defer srv.Close()
+
+	rt := HTTPTransport(nil)
+	req, _ := http.NewRequestWithContext(context.Background(), http.MethodPost, srv.URL, nil)
+	res, err := rt.RoundTrip(req)
+	if err != nil {
+		t.Fatalf("roundtrip: %v", err)
+	}
+	_ = res.Body.Close()
+
+	spans := exporter.GetSpans()
+	if len(spans) != 1 {
+		t.Fatalf("expected 1 span, got %d", len(spans))
+	}
+	host := req.URL.Hostname()
+	if want := "POST " + host; spans[0].Name != want {
+		t.Errorf("span name = %q, want %q", spans[0].Name, want)
+	}
+}
