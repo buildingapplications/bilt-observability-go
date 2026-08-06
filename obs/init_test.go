@@ -5,6 +5,8 @@ import (
 	"reflect"
 	"testing"
 
+	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
+	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 	"go.opentelemetry.io/otel/sdk/resource"
 	semconv "go.opentelemetry.io/otel/semconv/v1.40.0"
 )
@@ -157,4 +159,21 @@ func resourceAttr(res *resource.Resource, key string) string {
 		}
 	}
 	return ""
+}
+
+func TestDeltaTemporality_AllInstrumentKinds(t *testing.T) {
+	kinds := []sdkmetric.InstrumentKind{
+		sdkmetric.InstrumentKindCounter,
+		sdkmetric.InstrumentKindUpDownCounter,
+		sdkmetric.InstrumentKindHistogram,
+		sdkmetric.InstrumentKindGauge,
+		sdkmetric.InstrumentKindObservableCounter,
+		sdkmetric.InstrumentKindObservableUpDownCounter,
+		sdkmetric.InstrumentKindObservableGauge,
+	}
+	for _, k := range kinds {
+		if got := deltaTemporality(k); got != metricdata.DeltaTemporality {
+			t.Errorf("%v: got %v want delta", k, got)
+		}
+	}
 }

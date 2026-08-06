@@ -15,6 +15,7 @@ import (
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
 	"go.opentelemetry.io/otel/propagation"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
+	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 	"go.opentelemetry.io/otel/sdk/resource"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	semconv "go.opentelemetry.io/otel/semconv/v1.40.0"
@@ -229,8 +230,23 @@ func buildTracerProvider(ctx context.Context, cfg *Config, res *resource.Resourc
 	return tp, tp.Shutdown, nil
 }
 
+// Cumulative aggregators never evict an attribute set, so every set a process
+// has ever recorded is retained for its lifetime and re-serialised each cycle,
+// exemplar reservoir included. Delta drops each data point after collection.
+// Mirrors @biltme/otel's temporalityPreference + cardinalityLimits.
+func deltaTemporality(sdkmetric.InstrumentKind) metricdata.Temporality {
+	return metricdata.DeltaTemporality
+}
+
+// Backstop for an instrument that takes an unbounded attribute: the SDK folds
+// the overflow into a single datapoint instead of growing without limit.
+const cardinalityLimit = 1000
+
 func buildMeterProvider(ctx context.Context, cfg *Config, res *resource.Resource) (*sdkmetric.MeterProvider, Shutdown, error) {
-	exporterOpts := []otlpmetricgrpc.Option{otlpmetricgrpc.WithInsecure()}
+	exporterOpts := []otlpmetricgrpc.Option{
+		otlpmetricgrpc.WithInsecure(),
+		otlpmetricgrpc.WithTemporalitySelector(deltaTemporality),
+	}
 	if cfg.OTelEndpoint != "" {
 		exporterOpts = append(exporterOpts, otlpmetricgrpc.WithEndpointURL(cfg.OTelEndpoint))
 	}
@@ -242,6 +258,7 @@ func buildMeterProvider(ctx context.Context, cfg *Config, res *resource.Resource
 	mp := sdkmetric.NewMeterProvider(
 		sdkmetric.WithResource(res),
 		sdkmetric.WithReader(sdkmetric.NewPeriodicReader(exp)),
+		sdkmetric.WithCardinalityLimit(cardinalityLimit),
 	)
 	return mp, mp.Shutdown, nil
 }
