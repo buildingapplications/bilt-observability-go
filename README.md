@@ -25,6 +25,7 @@ One `Init` call wires:
 - chi HTTP middleware (RequestID, RealIP, Recoverer, otelhttp, http.route templating, access log) with health-path skip
 - otelhttp-wrapped outbound `http.Client`
 - Redis traceparent inject/extract + producer/consumer spans
+- pgx query/connect/acquire spans, named off the sqlc query name
 
 ## Usage
 
@@ -81,6 +82,7 @@ obs.ExtractTraceContext(ctx, traceparent) context.Context
 obs.ConsumerSpan(ctx, ConsumerOpts) (ctx, span)
 obs.ProducerSpan(ctx, ProducerOpts) (ctx, span)
 obs.WrapRedisClient(*redis.Client) error
+obs.InstrumentPgxPool(*pgxpool.Config)                   // call before pgxpool.NewWithConfig
 ```
 
 ## Context fields
@@ -116,7 +118,9 @@ service's own config.
 
 - BSP: 8192 queue / 1024 batch / 2s flush (matches `@biltme/otel`)
 - Sampler: `ParentBased(AlwaysSample)`
-- Cardinality: unlimited (Go SDK default)
+- Cardinality: 1000 attribute sets per instrument
+- Metric temporality: delta for every instrument kind, so a level must be an
+  async gauge — an UpDownCounter exports net change, not the level
 - Health paths: `/health`, `/healthz`, `/health/live`, `/health/ready`, `/api/health`
 
 ## Development
