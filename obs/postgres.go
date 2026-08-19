@@ -16,10 +16,11 @@ import (
 // temporality, which turns each of those levels into a net change.
 func InstrumentPgxPool(cfg *pgxpool.Config) {
 	// The pool type-asserts ConnConfig.Tracer for its acquire hooks, so this one
-	// assignment is also what produces the acquire span — the only place a stall
-	// on a dead pooled connection is visible.
+	// assignment also produces the acquire span — the only span covering the
+	// pool's liveness ping, which is issued down in pgconn where no tracer runs.
 	cfg.ConnConfig.Tracer = otelpgx.NewTracer(
-		// The span-name func is consulted only when the trim option is on.
+		// Without this the span name is the whole SQL text; the name func on its
+		// own only feeds db.operation.name.
 		otelpgx.WithTrimSQLInSpanName(),
 		otelpgx.WithSpanNameCtxFunc(sqlcSpanName),
 	)

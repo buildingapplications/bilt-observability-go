@@ -119,8 +119,8 @@ service's own config.
 - BSP: 8192 queue / 1024 batch / 2s flush (matches `@biltme/otel`)
 - Sampler: `ParentBased(AlwaysSample)`
 - Cardinality: 1000 attribute sets per instrument
-- Metric temporality: delta for every instrument kind, so a level must be an
-  async gauge — an UpDownCounter exports net change, not the level
+- Metric temporality: delta for every instrument kind, so a level must be a
+  gauge — an UpDownCounter exports net change, not the level
 - Health paths: `/health`, `/healthz`, `/health/live`, `/health/ready`, `/api/health`
 
 ## Development
