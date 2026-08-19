@@ -85,9 +85,9 @@ func TestInstrumentPgxPoolNamesSpansAfterTheQuery(t *testing.T) {
 	}
 	InstrumentPgxPool(cfg)
 
-	tracer, ok := cfg.ConnConfig.Tracer.(pgx.QueryTracer)
-	if !ok {
-		t.Fatal("tracer does not trace queries")
+	tracer := cfg.ConnConfig.Tracer
+	if tracer == nil {
+		t.Fatal("query tracer not set")
 	}
 
 	ctx, parent := otel.Tracer("test").Start(context.Background(), "parent")
