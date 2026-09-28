@@ -22,6 +22,39 @@ func TestInit_RequiresServiceName(t *testing.T) {
 	}
 }
 
+func TestBuildMeterProvider_PullReaderWithoutOTLPPush(t *testing.T) {
+	ctx := context.Background()
+	reader := sdkmetric.NewManualReader()
+	res, err := buildResource(ctx, &Config{ServiceName: "simhost"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mp, shutdown, err := buildMeterProvider(ctx, &Config{
+		DisableOTLPMetrics: true,
+		MetricReaders:      []sdkmetric.Reader{reader},
+	}, res)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = shutdown(ctx) })
+	count, err := mp.Meter("test").Int64Counter("simhost.requests")
+	if err != nil {
+		t.Fatal(err)
+	}
+	count.Add(ctx, 1)
+	var collected metricdata.ResourceMetrics
+	if err := reader.Collect(ctx, &collected); err != nil {
+		t.Fatal(err)
+	}
+	if got := resourceAttr(collected.Resource, "service.name"); got != "simhost" {
+		t.Fatalf("service.name = %q, want simhost", got)
+	}
+	if len(collected.ScopeMetrics) != 1 || len(collected.ScopeMetrics[0].Metrics) != 1 ||
+		collected.ScopeMetrics[0].Metrics[0].Name != "simhost.requests" {
+		t.Fatalf("pull reader did not collect the recorded metric: %+v", collected.ScopeMetrics)
+	}
+}
+
 func TestInit_Idempotent(t *testing.T) {
 	resetForTest()
 	t.Setenv(disableEnv, "1")

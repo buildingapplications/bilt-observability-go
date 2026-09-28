@@ -19,7 +19,7 @@
 One `Init` call wires:
 
 - zap logger (`timestamp`, `level`, `msg`, `service`, `request_id`, `trace_id`, `span_id`)
-- OTel TracerProvider + MeterProvider over OTLP gRPC
+- OTel TracerProvider over OTLP gRPC and a MeterProvider with OTLP and optional pull readers
 - W3C TraceContext + Baggage propagators
 - runtime metrics (`process.runtime.go.*`)
 - chi HTTP middleware (RequestID, RealIP, Recoverer, otelhttp, http.route templating, access log) with health-path skip
@@ -106,6 +106,13 @@ importing their packages.
 
 Set `BILT_OBS_DISABLE=1` (or `true`) to make `Init` return a no-op shutdown
 without touching OTel globals. Logger still works.
+
+## Pull metrics
+
+Pass a Prometheus exporter or another SDK reader in `Config.MetricReaders` to
+collect the service's existing instruments on demand. OTLP metric export stays
+enabled unless `Config.DisableOTLPMetrics` is true. Traces still use OTLP when
+metric push is disabled.
 
 ## Environment override
 

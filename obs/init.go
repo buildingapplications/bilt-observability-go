@@ -43,6 +43,8 @@ type Config struct {
 	Sampler             sdktrace.Sampler
 	ExtraSpanProcessors []sdktrace.SpanProcessor
 	ExtraResourceAttrs  []attribute.KeyValue
+	MetricReaders       []sdkmetric.Reader
+	DisableOTLPMetrics  bool
 	BSPOptions          *BSPOptions
 	HealthPaths         []string
 
@@ -243,23 +245,29 @@ func deltaTemporality(sdkmetric.InstrumentKind) metricdata.Temporality {
 const cardinalityLimit = 1000
 
 func buildMeterProvider(ctx context.Context, cfg *Config, res *resource.Resource) (*sdkmetric.MeterProvider, Shutdown, error) {
-	exporterOpts := []otlpmetricgrpc.Option{
-		otlpmetricgrpc.WithInsecure(),
-		otlpmetricgrpc.WithTemporalitySelector(deltaTemporality),
+	opts := []sdkmetric.Option{
+		sdkmetric.WithResource(res),
+		sdkmetric.WithCardinalityLimit(cardinalityLimit),
 	}
-	if cfg.OTelEndpoint != "" {
-		exporterOpts = append(exporterOpts, otlpmetricgrpc.WithEndpointURL(cfg.OTelEndpoint))
+	if !cfg.DisableOTLPMetrics {
+		exporterOpts := []otlpmetricgrpc.Option{
+			otlpmetricgrpc.WithInsecure(),
+			otlpmetricgrpc.WithTemporalitySelector(deltaTemporality),
+		}
+		if cfg.OTelEndpoint != "" {
+			exporterOpts = append(exporterOpts, otlpmetricgrpc.WithEndpointURL(cfg.OTelEndpoint))
+		}
+		exp, err := otlpmetricgrpc.New(ctx, exporterOpts...)
+		if err != nil {
+			return nil, nil, fmt.Errorf("metric exporter: %w", err)
+		}
+		opts = append(opts, sdkmetric.WithReader(sdkmetric.NewPeriodicReader(exp)))
 	}
-	exp, err := otlpmetricgrpc.New(ctx, exporterOpts...)
-	if err != nil {
-		return nil, nil, fmt.Errorf("metric exporter: %w", err)
+	for _, reader := range cfg.MetricReaders {
+		opts = append(opts, sdkmetric.WithReader(reader))
 	}
 
-	mp := sdkmetric.NewMeterProvider(
-		sdkmetric.WithResource(res),
-		sdkmetric.WithReader(sdkmetric.NewPeriodicReader(exp)),
-		sdkmetric.WithCardinalityLimit(cardinalityLimit),
-	)
+	mp := sdkmetric.NewMeterProvider(opts...)
 	return mp, mp.Shutdown, nil
 }
 
