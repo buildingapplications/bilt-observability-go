@@ -114,6 +114,15 @@ collect the service's existing instruments on demand. OTLP metric export stays
 enabled unless `Config.DisableOTLPMetrics` is true. Traces still use OTLP when
 metric push is disabled.
 
+## Local trace storage
+
+Set `Config.TraceClient` to an `otlptrace.Client` that writes to local storage.
+`Init` wraps it in an OTLP exporter and synchronous span processor in place of
+the default gRPC exporter. For example, simhost passes its durable trace spool
+directly as `TraceClient`. `ExtraSpanProcessors` still run alongside it. The
+caller owns the storage and its read and acknowledgement API; `Init` shuts down
+the exporter with the tracer provider.
+
 ## Environment override
 
 Set `BILT_OBS_ENVIRONMENT` to override `Config.Environment` for the
