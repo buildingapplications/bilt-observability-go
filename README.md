@@ -121,7 +121,9 @@ Set `Config.TraceClient` to an `otlptrace.Client` that writes to local storage.
 the default gRPC exporter. For example, simhost passes its durable trace spool
 directly as `TraceClient`. `ExtraSpanProcessors` still run alongside it. The
 caller owns the storage and its read and acknowledgement API; `Init` shuts down
-the exporter with the tracer provider.
+the exporter with the tracer provider. With `TraceClient`, each `Span.End`
+waits for `UploadTraces` to return. Keep that operation bounded and local;
+`OTelEndpoint` and `BSPOptions` apply only to the default gRPC exporter.
 
 ## Environment override
 
