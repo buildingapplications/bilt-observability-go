@@ -12,6 +12,7 @@ import (
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetricgrpc"
+	"go.opentelemetry.io/otel/exporters/otlp/otlptrace"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
 	"go.opentelemetry.io/otel/propagation"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
@@ -40,7 +41,9 @@ type Config struct {
 	Environment  string
 	OTelEndpoint string
 
-	Sampler             sdktrace.Sampler
+	Sampler sdktrace.Sampler
+	// TraceClient replaces gRPC and calls UploadTraces on Span.End; keep it bounded.
+	TraceClient         otlptrace.Client
 	ExtraSpanProcessors []sdktrace.SpanProcessor
 	ExtraResourceAttrs  []attribute.KeyValue
 	MetricReaders       []sdkmetric.Reader
@@ -199,25 +202,28 @@ func buildResource(ctx context.Context, cfg *Config) (*resource.Resource, error)
 }
 
 func buildTracerProvider(ctx context.Context, cfg *Config, res *resource.Resource) (*sdktrace.TracerProvider, Shutdown, error) {
-	exporterOpts := []otlptracegrpc.Option{otlptracegrpc.WithInsecure()}
-	if cfg.OTelEndpoint != "" {
-		exporterOpts = append(exporterOpts, otlptracegrpc.WithEndpointURL(cfg.OTelEndpoint))
-	}
-	exp, err := otlptracegrpc.New(ctx, exporterOpts...)
-	if err != nil {
-		return nil, nil, fmt.Errorf("trace exporter: %w", err)
-	}
-
-	bspOpts := bspOptionsOrDefault(cfg.BSPOptions)
-	bsp := sdktrace.NewBatchSpanProcessor(exp,
-		sdktrace.WithMaxQueueSize(bspOpts.MaxQueueSize),
-		sdktrace.WithMaxExportBatchSize(bspOpts.MaxExportBatchSize),
-		sdktrace.WithBatchTimeout(bspOpts.ScheduledDelay),
-	)
-
-	tpOpts := []sdktrace.TracerProviderOption{
-		sdktrace.WithResource(res),
-		sdktrace.WithSpanProcessor(bsp),
+	tpOpts := []sdktrace.TracerProviderOption{sdktrace.WithResource(res)}
+	if cfg.TraceClient != nil {
+		exp, err := otlptrace.New(ctx, cfg.TraceClient)
+		if err != nil {
+			return nil, nil, fmt.Errorf("trace client: %w", err)
+		}
+		tpOpts = append(tpOpts, sdktrace.WithSyncer(exp))
+	} else {
+		exporterOpts := []otlptracegrpc.Option{otlptracegrpc.WithInsecure()}
+		if cfg.OTelEndpoint != "" {
+			exporterOpts = append(exporterOpts, otlptracegrpc.WithEndpointURL(cfg.OTelEndpoint))
+		}
+		exp, err := otlptracegrpc.New(ctx, exporterOpts...)
+		if err != nil {
+			return nil, nil, fmt.Errorf("trace exporter: %w", err)
+		}
+		bspOpts := bspOptionsOrDefault(cfg.BSPOptions)
+		tpOpts = append(tpOpts, sdktrace.WithSpanProcessor(sdktrace.NewBatchSpanProcessor(exp,
+			sdktrace.WithMaxQueueSize(bspOpts.MaxQueueSize),
+			sdktrace.WithMaxExportBatchSize(bspOpts.MaxExportBatchSize),
+			sdktrace.WithBatchTimeout(bspOpts.ScheduledDelay),
+		)))
 	}
 	for _, sp := range cfg.ExtraSpanProcessors {
 		tpOpts = append(tpOpts, sdktrace.WithSpanProcessor(sp))

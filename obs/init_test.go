@@ -5,11 +5,22 @@ import (
 	"reflect"
 	"testing"
 
+	"go.opentelemetry.io/otel/attribute"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 	"go.opentelemetry.io/otel/sdk/resource"
 	semconv "go.opentelemetry.io/otel/semconv/v1.40.0"
+	tracepb "go.opentelemetry.io/proto/otlp/trace/v1"
 )
+
+type recordingTraceClient struct{ uploads []*tracepb.ResourceSpans }
+
+func (*recordingTraceClient) Start(context.Context) error { return nil }
+func (*recordingTraceClient) Stop(context.Context) error  { return nil }
+func (c *recordingTraceClient) UploadTraces(_ context.Context, spans []*tracepb.ResourceSpans) error {
+	c.uploads = append(c.uploads, spans...)
+	return nil
+}
 
 func TestInit_RequiresServiceName(t *testing.T) {
 	resetForTest()
@@ -52,6 +63,42 @@ func TestBuildMeterProvider_PullReaderWithoutOTLPPush(t *testing.T) {
 	if len(collected.ScopeMetrics) != 1 || len(collected.ScopeMetrics[0].Metrics) != 1 ||
 		collected.ScopeMetrics[0].Metrics[0].Name != "simhost.requests" {
 		t.Fatalf("pull reader did not collect the recorded metric: %+v", collected.ScopeMetrics)
+	}
+}
+
+func TestBuildResource_ExplicitHostNameOverridesMachineName(t *testing.T) {
+	res, err := buildResource(context.Background(), &Config{
+		ServiceName:        "bilt-simhost",
+		ExtraResourceAttrs: []attribute.KeyValue{attribute.String("host.name", "armastus")},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := resourceAttr(res, "host.name"); got != "armastus" {
+		t.Fatalf("host.name = %q, want armastus", got)
+	}
+}
+
+func TestBuildTracerProvider_LocalTraceClient(t *testing.T) {
+	ctx := context.Background()
+	res, err := buildResource(ctx, &Config{ServiceName: "simhost"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := &recordingTraceClient{}
+	tp, shutdown, err := buildTracerProvider(ctx, &Config{
+		TraceClient:  client,
+		OTelEndpoint: "://invalid-endpoint",
+	}, res)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = shutdown(ctx) })
+	_, span := tp.Tracer("test").Start(ctx, "spooled")
+	span.End()
+	if len(client.uploads) != 1 || len(client.uploads[0].ScopeSpans) != 1 ||
+		client.uploads[0].ScopeSpans[0].Spans[0].Name != "spooled" {
+		t.Fatalf("local trace client received %d resource spans, want spooled", len(client.uploads))
 	}
 }
 
