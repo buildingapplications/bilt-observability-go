@@ -41,7 +41,7 @@ type Config struct {
 	Environment  string
 	OTelEndpoint string
 
-	Sampler             sdktrace.Sampler
+	Sampler sdktrace.Sampler
 	// TraceClient replaces gRPC and calls UploadTraces on Span.End; keep it bounded.
 	TraceClient         otlptrace.Client
 	ExtraSpanProcessors []sdktrace.SpanProcessor
