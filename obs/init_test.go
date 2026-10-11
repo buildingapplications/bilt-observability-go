@@ -137,6 +137,22 @@ func TestInit_Killswitch(t *testing.T) {
 	}
 }
 
+func TestInitLogger_LogsFromAnyContextWithoutTelemetry(t *testing.T) {
+	resetForTest()
+	t.Cleanup(resetForTest)
+	InitLogger("root-daemon", "info")
+	if Log(context.Background()) != cachedLogger || cachedLogger == nil {
+		t.Fatal("Log on a bare context does not use the installed logger")
+	}
+	shut, err := Init(context.Background(), &Config{ServiceName: "other"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := shut(context.Background()); err != nil {
+		t.Fatalf("a logger-only process got a real shutdown: %v", err)
+	}
+}
+
 func TestInit_KillswitchTrueValue(t *testing.T) {
 	resetForTest()
 	t.Setenv(disableEnv, "true")

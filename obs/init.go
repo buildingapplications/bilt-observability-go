@@ -97,11 +97,7 @@ func Init(ctx context.Context, cfg *Config) (Shutdown, error) {
 	}
 
 	if v := os.Getenv(disableEnv); v == "1" || v == "true" {
-		cachedLogger = buildLogger(cfg.ServiceName, cfg.LogLevel)
-		cachedHealth = resolveHealthPaths(cfg.HealthPaths)
-		cachedContextFields = cfg.ContextFields
-		cachedShut = func(context.Context) error { return nil }
-		initialized = true
+		initLoggerOnly(cfg)
 		return cachedShut, nil
 	}
 
@@ -296,6 +292,23 @@ func bspOptionsOrDefault(in *BSPOptions) BSPOptions {
 		out.ScheduledDelay = in.ScheduledDelay
 	}
 	return out
+}
+
+// InitLogger installs only the package logger, with no tracer, meter or exporters.
+func InitLogger(serviceName, logLevel string) {
+	initMu.Lock()
+	defer initMu.Unlock()
+	if !initialized {
+		initLoggerOnly(&Config{ServiceName: serviceName, LogLevel: logLevel})
+	}
+}
+
+func initLoggerOnly(cfg *Config) {
+	cachedLogger = buildLogger(cfg.ServiceName, cfg.LogLevel)
+	cachedHealth = resolveHealthPaths(cfg.HealthPaths)
+	cachedContextFields = cfg.ContextFields
+	cachedShut = func(context.Context) error { return nil }
+	initialized = true
 }
 
 // resetForTest clears cached state. Tests only.
