@@ -47,6 +47,17 @@ func Go(ctx context.Context, name string, fn func(ctx context.Context) error) {
 	}()
 }
 
+// Recover turns a panic into *err so the caller's normal failure path runs.
+// It only logs the stack: that path owns the span, so the exception lands once.
+// Defer it directly; wrapped in a closure it recovers nothing:
+//
+//	defer obs.Recover(ctx, &err)
+func Recover(ctx context.Context, err *error) {
+	if rec := recover(); rec != nil {
+		_, *err = logPanic(Log(ctx), rec)
+	}
+}
+
 // recoverer replaces chi's Recoverer, which prints to stderr with no trace ID
 // and leaves the span without the exception.
 func recoverer(lg *zap.SugaredLogger) func(http.Handler) http.Handler {
@@ -71,9 +82,15 @@ func recoverer(lg *zap.SugaredLogger) func(http.Handler) http.Handler {
 	}
 }
 
-// recordPanic must be called from the deferred recover so the stack still
-// contains the panicking frames.
 func recordPanic(lg *zap.SugaredLogger, span trace.Span, rec any) {
+	stack, err := logPanic(lg, rec)
+	span.RecordError(err, trace.WithAttributes(attribute.String("exception.stacktrace", stack)))
+	span.SetStatus(codes.Error, err.Error())
+}
+
+// logPanic must be called from the deferred recover so the stack still
+// contains the panicking frames.
+func logPanic(lg *zap.SugaredLogger, rec any) (string, error) {
 	err, ok := rec.(error)
 	if ok {
 		err = fmt.Errorf("panic: %w", err)
@@ -82,6 +99,5 @@ func recordPanic(lg *zap.SugaredLogger, span trace.Span, rec any) {
 	}
 	stack := string(debug.Stack())
 	lg.Errorw("panic recovered", "error", err, "stack", stack)
-	span.RecordError(err, trace.WithAttributes(attribute.String("exception.stacktrace", stack)))
-	span.SetStatus(codes.Error, err.Error())
+	return stack, err
 }
