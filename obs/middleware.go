@@ -17,9 +17,7 @@ import (
 // To attach extra per-request span attributes (auth principal, tenant id,
 // etc.), call trace.SpanFromContext(r.Context()).SetAttributes(...) directly
 // from a handler or downstream middleware. The span is already in ctx; no
-// lib hook needed. For error messages on status >= 400, call
-// SetHandlerError(ctx, msg) — the lib sets bilt.handler_error on the span,
-// plus a RecordError event on 5xx.
+// lib hook needed.
 type MiddlewareOptions struct {
 	// SkipPaths bypass tracing. Defaults to DefaultHealthPaths().
 	SkipPaths []string
@@ -82,8 +80,7 @@ func otelWithSkip(serverName string, skip map[string]struct{}) func(http.Handler
 // captureErrorAndRoute wraps the response so status is readable after the
 // handler runs, allocates the handler-error slot, and on the way out:
 //   - sets http.route from chi RouteContext
-//   - sets SetHandlerError(msg) as bilt.handler_error when status >= 400, and
-//     records it as an exception event when status >= 500
+//   - promotes SetHandlerError(msg) onto the span when status >= 400
 func captureErrorAndRoute() func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
