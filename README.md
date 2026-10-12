@@ -22,7 +22,7 @@ One `Init` call wires:
 - OTel TracerProvider over OTLP gRPC and a MeterProvider with OTLP and optional pull readers
 - W3C TraceContext + Baggage propagators
 - runtime metrics (`process.runtime.go.*`)
-- chi HTTP middleware (RequestID, RealIP, Recoverer, otelhttp, http.route templating, access log) with health-path skip
+- chi HTTP middleware (RequestID, RealIP, panic recovery logged + recorded on the span, otelhttp, http.route templating, access log) with health-path skip
 - otelhttp-wrapped outbound `http.Client`
 - Redis traceparent inject/extract + producer/consumer spans
 - pgx query/connect/acquire spans, named off the sqlc query name
@@ -81,6 +81,9 @@ obs.InjectTraceContext(ctx) string
 obs.ExtractTraceContext(ctx, traceparent) context.Context
 obs.ConsumerSpan(ctx, ConsumerOpts) (ctx, span)
 obs.ProducerSpan(ctx, ProducerOpts) (ctx, span)
+obs.BackgroundSpan(ctx, name, BackgroundOpts) (ctx, span)
+obs.Go(ctx, name, func(ctx) error)                       // goroutine with span; error/panic logged + recorded, panic recovered
+obs.EndSpan(span, err)                                   // RecordError + Error status if err != nil, then End
 obs.WrapRedisClient(*redis.Client) error
 obs.InstrumentPgxPool(*pgxpool.Config)                   // call before pgxpool.NewWithConfig
 ```
