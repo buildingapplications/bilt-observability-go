@@ -12,6 +12,7 @@ import (
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 	"go.opentelemetry.io/otel/trace"
 	"go.uber.org/zap"
+	"go.uber.org/zap/zaptest/observer"
 )
 
 func newTestTracer(t *testing.T) *tracetest.InMemoryExporter {
@@ -115,13 +116,14 @@ func TestHTTPMiddleware_PanicRecoveredWith500SpanStatus(t *testing.T) {
 	resetForTest()
 	exporter := newTestTracer(t)
 
+	core, logs := observer.New(zap.ErrorLevel)
 	r := chi.NewRouter()
-	r.Use(HTTPMiddleware(zap.NewNop().Sugar(), MiddlewareOptions{SkipPaths: []string{}}))
-	r.Get("/boom", func(w http.ResponseWriter, r *http.Request) { panic("test panic") })
+	r.Use(HTTPMiddleware(zap.New(core).Sugar(), MiddlewareOptions{SkipPaths: []string{}}))
+	r.Get("/boom/{id}", func(w http.ResponseWriter, r *http.Request) { panic("test panic") })
 
 	srv := httptest.NewServer(r)
 	defer srv.Close()
-	resp, err := http.Get(srv.URL + "/boom")
+	resp, err := http.Get(srv.URL + "/boom/1")
 	if err != nil {
 		t.Fatalf("get: %v", err)
 	}
@@ -146,6 +148,20 @@ func TestHTTPMiddleware_PanicRecoveredWith500SpanStatus(t *testing.T) {
 	}
 	if got != 500 {
 		t.Errorf("expected span http.status_code=500, got %d. Attrs: %v", got, spans[0].Attributes)
+	}
+	if route, _ := attrString(spans[0].Attributes, "http.route"); route != "/boom/{id}" {
+		t.Errorf("want http.route=/boom/{id} on panicked request, got %q", route)
+	}
+	if !hasStackedException(spans[0].Events) {
+		t.Errorf("want exception event with stacktrace, events=%v", spans[0].Events)
+	}
+
+	entries := logs.FilterMessage("panic recovered").All()
+	if len(entries) != 1 {
+		t.Fatalf("want 1 panic log, got %d", len(entries))
+	}
+	if entries[0].ContextMap()["trace_id"] != spans[0].SpanContext.TraceID().String() {
+		t.Errorf("panic log not correlated to span: %v", entries[0].ContextMap())
 	}
 }
 
