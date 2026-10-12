@@ -91,7 +91,7 @@ func TestHTTPMiddleware_HandlerError_PromotedToSpan(t *testing.T) {
 			if !ok || msg != "db down" {
 				t.Errorf("/broken: want bilt.handler_error=db down, got %q (ok=%v)", msg, ok)
 			}
-			// otelhttp re-sets Error on 5xx after us, clearing the description.
+			// Set by otelhttp from the 5xx, with no description.
 			if s.Status.Code != codes.Error {
 				t.Errorf("/broken: want Error status, got %v", s.Status)
 			}

@@ -8,7 +8,6 @@ import (
 	chimiddleware "github.com/go-chi/chi/v5/middleware"
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 	"go.opentelemetry.io/otel/attribute"
-	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/trace"
 	"go.uber.org/zap"
 )
@@ -20,7 +19,7 @@ import (
 // from a handler or downstream middleware. The span is already in ctx; no
 // lib hook needed. For error messages on status >= 400, call
 // SetHandlerError(ctx, msg) — the lib sets bilt.handler_error on the span,
-// plus RecordError + Error status on 5xx.
+// plus a RecordError event on 5xx.
 type MiddlewareOptions struct {
 	// SkipPaths bypass tracing. Defaults to DefaultHealthPaths().
 	SkipPaths []string
@@ -37,8 +36,8 @@ type MiddlewareOptions struct {
 // Recoverer just wrote).
 //
 // Handler errors recorded via SetHandlerError are set as the
-// bilt.handler_error span attribute when the response status is >= 400, and
-// additionally as a RecordError event + Error status when it is >= 500. No access log is emitted; the span
+// bilt.handler_error span attribute when the response status is >= 400, plus
+// a RecordError event when it is >= 500. No access log is emitted; the span
 // (with trace_id) is the single source of truth for per-request observability.
 func HTTPMiddleware(lg *zap.SugaredLogger, opts MiddlewareOptions) func(http.Handler) http.Handler {
 	skip := opts.SkipPaths
@@ -84,7 +83,7 @@ func otelWithSkip(serverName string, skip map[string]struct{}) func(http.Handler
 // handler runs, allocates the handler-error slot, and on the way out:
 //   - sets http.route from chi RouteContext
 //   - sets SetHandlerError(msg) as bilt.handler_error when status >= 400, and
-//     promotes it to RecordError + Error status when status >= 500
+//     records it as an exception event when status >= 500
 func captureErrorAndRoute() func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -104,11 +103,10 @@ func captureErrorAndRoute() func(http.Handler) http.Handler {
 			if ww.Status() >= 400 {
 				if msg := HandlerError(ctx); msg != "" {
 					span.SetAttributes(attribute.String("bilt.handler_error", msg))
-					// A 4xx is the client's fault (OTel server semconv); marking it
-					// Error buries real faults in error-rate views.
+					// A 4xx is the client's fault (OTel server semconv); an exception
+					// event on it buries real faults. otelhttp owns the Error status.
 					if ww.Status() >= 500 {
 						span.RecordError(errors.New(msg))
-						span.SetStatus(codes.Error, msg)
 					}
 				}
 			}
