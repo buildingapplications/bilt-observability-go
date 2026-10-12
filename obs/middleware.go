@@ -30,8 +30,7 @@ type MiddlewareOptions struct {
 // context enrichment. Paths in SkipPaths bypass otelhttp entirely.
 //
 // The recoverer runs inside route capture so a panicked request still gets
-// its http.route and templated span name, and logs the panic with trace ID
-// and stack before writing the 500.
+// its http.route and templated span name.
 //
 // Handler errors recorded via SetHandlerError are set as the
 // bilt.handler_error span attribute when the response status is >= 400, plus

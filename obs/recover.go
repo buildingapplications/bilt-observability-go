@@ -25,9 +25,9 @@ func EndSpan(span trace.Span, err error) {
 	span.End()
 }
 
-// Go runs fn in a new goroutine under a BackgroundSpan named name. A returned
-// error or a panic is logged at Error and recorded on the span. A panic is
-// recovered: one failed task must not take down the process.
+// Go runs fn in a new goroutine under a BackgroundSpan named name. Errors and
+// panics are logged and recorded on the span; panics are recovered so one
+// failed task can't take down the process.
 func Go(ctx context.Context, name string, fn func(ctx context.Context) error) {
 	go func() {
 		ctx, span := BackgroundSpan(ctx, name, BackgroundOpts{})
