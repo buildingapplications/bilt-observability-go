@@ -3,6 +3,7 @@ package obs
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -106,12 +107,15 @@ func TestRecover(t *testing.T) {
 	if !errors.Is(err, sentinel) {
 		t.Fatalf("err = %v, want wrapping the panicked error", err)
 	}
-	if n := logs.FilterMessage("panic recovered").Len(); n != 1 {
-		t.Errorf("want 1 panic log, got %d", n)
+	panics := logs.FilterMessage("panic recovered").All()
+	if len(panics) != 1 {
+		t.Fatalf("want 1 panic log, got %d", len(panics))
 	}
-	got := exporter.GetSpans()[0]
-	if got.Status.Code != codes.Error || !hasStackedException(got.Events) {
-		t.Errorf("want Error status with stacked exception, got %v %v", got.Status, got.Events)
+	if stack, _ := panics[0].ContextMap()["stack"].(string); !strings.Contains(stack, "panic(") {
+		t.Errorf("stack lacks the panicking frame:\n%s", stack)
+	}
+	if got := exporter.GetSpans()[0]; got.Status.Code != codes.Unset || len(got.Events) != 0 {
+		t.Errorf("want span untouched for the caller to record, got %v %v", got.Status, got.Events)
 	}
 }
 
