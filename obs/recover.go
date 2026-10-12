@@ -34,7 +34,7 @@ func Go(ctx context.Context, name string, fn func(ctx context.Context) error) {
 		var err error
 		defer func() {
 			if rec := recover(); rec != nil {
-				recordPanic(Log(ctx).With("task", name), span, rec)
+				_ = recordPanic(Log(ctx).With("task", name), span, rec)
 				span.End()
 				return
 			}
@@ -45,6 +45,16 @@ func Go(ctx context.Context, name string, fn func(ctx context.Context) error) {
 		}()
 		err = fn(ctx)
 	}()
+}
+
+// Recover turns a panic into *err so the caller's normal failure path runs. It
+// logs the panic with its stack and records it on ctx's span. Defer it directly:
+//
+//	defer obs.Recover(ctx, &err)
+func Recover(ctx context.Context, err *error) {
+	if rec := recover(); rec != nil {
+		*err = recordPanic(Log(ctx), trace.SpanFromContext(ctx), rec)
+	}
 }
 
 // recoverer replaces chi's Recoverer, which prints to stderr with no trace ID
@@ -61,7 +71,7 @@ func recoverer(lg *zap.SugaredLogger) func(http.Handler) http.Handler {
 					panic(rec)
 				}
 				ctx := r.Context()
-				recordPanic(LoggerFromContext(ctx, lg).With("request_id", chimiddleware.GetReqID(ctx)), trace.SpanFromContext(ctx), rec)
+				_ = recordPanic(LoggerFromContext(ctx, lg).With("request_id", chimiddleware.GetReqID(ctx)), trace.SpanFromContext(ctx), rec)
 				if r.Header.Get("Connection") != "Upgrade" {
 					w.WriteHeader(http.StatusInternalServerError)
 				}
@@ -73,7 +83,7 @@ func recoverer(lg *zap.SugaredLogger) func(http.Handler) http.Handler {
 
 // recordPanic must be called from the deferred recover so the stack still
 // contains the panicking frames.
-func recordPanic(lg *zap.SugaredLogger, span trace.Span, rec any) {
+func recordPanic(lg *zap.SugaredLogger, span trace.Span, rec any) error {
 	err, ok := rec.(error)
 	if ok {
 		err = fmt.Errorf("panic: %w", err)
@@ -84,4 +94,5 @@ func recordPanic(lg *zap.SugaredLogger, span trace.Span, rec any) {
 	lg.Errorw("panic recovered", "error", err, "stack", stack)
 	span.RecordError(err, trace.WithAttributes(attribute.String("exception.stacktrace", stack)))
 	span.SetStatus(codes.Error, err.Error())
+	return err
 }

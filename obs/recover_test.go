@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/codes"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
@@ -87,4 +88,40 @@ func hasStackedException(events []sdktrace.Event) bool {
 		}
 	}
 	return false
+}
+
+func TestRecover(t *testing.T) {
+	resetForTest()
+	exporter := newTestTracer(t)
+	core, logs := observer.New(zap.ErrorLevel)
+	ctx, span := otel.Tracer("test").Start(WithLogger(context.Background(), zap.New(core).Sugar()), "op")
+
+	sentinel := errors.New("nil deref")
+	err := func() (err error) {
+		defer Recover(ctx, &err)
+		panic(sentinel)
+	}()
+	span.End()
+
+	if !errors.Is(err, sentinel) {
+		t.Fatalf("err = %v, want wrapping the panicked error", err)
+	}
+	if n := logs.FilterMessage("panic recovered").Len(); n != 1 {
+		t.Errorf("want 1 panic log, got %d", n)
+	}
+	got := exporter.GetSpans()[0]
+	if got.Status.Code != codes.Error || !hasStackedException(got.Events) {
+		t.Errorf("want Error status with stacked exception, got %v %v", got.Status, got.Events)
+	}
+}
+
+func TestRecover_NoPanicLeavesErr(t *testing.T) {
+	want := errors.New("plain")
+	err := func() (err error) {
+		defer Recover(context.Background(), &err)
+		return want
+	}()
+	if err != want {
+		t.Errorf("err = %v, want %v", err, want)
+	}
 }

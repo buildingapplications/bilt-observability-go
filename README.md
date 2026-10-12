@@ -83,6 +83,7 @@ obs.ConsumerSpan(ctx, ConsumerOpts) (ctx, span)
 obs.ProducerSpan(ctx, ProducerOpts) (ctx, span)
 obs.BackgroundSpan(ctx, name, BackgroundOpts) (ctx, span)
 obs.Go(ctx, name, func(ctx) error)                       // goroutine with span; error/panic logged + recorded, panic recovered
+obs.Recover(ctx, &err)                                   // defer: panic becomes *err, logged + recorded on ctx's span
 obs.EndSpan(span, err)                                   // RecordError + Error status if err != nil, then End
 obs.WrapRedisClient(*redis.Client) error
 obs.InstrumentPgxPool(*pgxpool.Config)                   // call before pgxpool.NewWithConfig
