@@ -41,6 +41,10 @@ func TestHTTPMiddleware_HandlerError_PromotedToSpan(t *testing.T) {
 		SetHandlerError(r.Context(), "validation failed")
 		w.WriteHeader(400)
 	})
+	r.Get("/broken", func(w http.ResponseWriter, r *http.Request) {
+		SetHandlerError(r.Context(), "db down")
+		w.WriteHeader(500)
+	})
 	r.Get("/no-msg", func(w http.ResponseWriter, r *http.Request) {
 		// 500 but handler doesn't call SetHandlerError; no bilt.handler_error attr
 		w.WriteHeader(500)
@@ -50,11 +54,12 @@ func TestHTTPMiddleware_HandlerError_PromotedToSpan(t *testing.T) {
 	defer srv.Close()
 	httpGet(t, srv.URL+"/ok")
 	httpGet(t, srv.URL+"/bad")
+	httpGet(t, srv.URL+"/broken")
 	httpGet(t, srv.URL+"/no-msg")
 
 	spans := exporter.GetSpans()
-	if len(spans) != 3 {
-		t.Fatalf("expected 3 spans, got %d", len(spans))
+	if len(spans) != 4 {
+		t.Fatalf("expected 4 spans, got %d", len(spans))
 	}
 
 	for _, s := range spans {
@@ -75,11 +80,20 @@ func TestHTTPMiddleware_HandlerError_PromotedToSpan(t *testing.T) {
 			if !ok || msg != "validation failed" {
 				t.Errorf("/bad: want bilt.handler_error=validation failed, got %q (ok=%v)", msg, ok)
 			}
-			if s.Status.Code != codes.Error {
-				t.Errorf("/bad: want Error status, got %v", s.Status)
+			if s.Status.Code == codes.Error {
+				t.Errorf("/bad: 4xx must not have Error status, got %v", s.Status)
 			}
-			if s.Status.Description != "validation failed" {
-				t.Errorf("/bad: want status desc 'validation failed', got %q", s.Status.Description)
+			if len(s.Events) != 0 {
+				t.Errorf("/bad: 4xx must not record an exception, events=%v", s.Events)
+			}
+		case "/broken":
+			msg, ok := attrString(s.Attributes, "bilt.handler_error")
+			if !ok || msg != "db down" {
+				t.Errorf("/broken: want bilt.handler_error=db down, got %q (ok=%v)", msg, ok)
+			}
+			// otelhttp re-sets Error on 5xx after us, clearing the description.
+			if s.Status.Code != codes.Error {
+				t.Errorf("/broken: want Error status, got %v", s.Status)
 			}
 			foundEvent := false
 			for _, ev := range s.Events {
@@ -88,7 +102,7 @@ func TestHTTPMiddleware_HandlerError_PromotedToSpan(t *testing.T) {
 				}
 			}
 			if !foundEvent {
-				t.Errorf("/bad: want exception event from RecordError, events=%v", s.Events)
+				t.Errorf("/broken: want exception event from RecordError, events=%v", s.Events)
 			}
 		case "/no-msg":
 			if _, ok := attrString(s.Attributes, "bilt.handler_error"); ok {
