@@ -72,6 +72,7 @@ obs.HTTPMiddleware(lg, MiddlewareOptions) func(http.Handler) http.Handler
 
 obs.WithHandlerError(ctx) ctx                // (auto-called by HTTPMiddleware)
 obs.SetHandlerError(ctx, msg string)         // call from handler/error mapper
+obs.SetHandlerFault(ctx, err error)          // internal failure; span error at any status
 obs.HandlerError(ctx) string                 // (read by HTTPMiddleware on 4xx/5xx)
 obs.HTTPClient(*http.Client) *http.Client
 obs.HTTPTransport(http.RoundTripper) http.RoundTripper   // for transport slots; client spans are named "<METHOD> <host>"

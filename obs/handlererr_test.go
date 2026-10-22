@@ -2,6 +2,7 @@ package obs
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -27,6 +28,51 @@ func TestHandlerError_NoSlotIsNoop(t *testing.T) {
 	SetHandlerError(ctx, "ignored")
 	if got := HandlerError(ctx); got != "" {
 		t.Errorf("expected empty without slot, got %q", got)
+	}
+}
+
+func TestHTTPMiddleware_HandlerFault_ReportedAtAnyStatus(t *testing.T) {
+	resetForTest()
+	exporter := newTestTracer(t)
+
+	r := chi.NewRouter()
+	r.Use(HTTPMiddleware(zap.NewNop().Sugar(), MiddlewareOptions{SkipPaths: []string{}}))
+	r.Get("/masked", func(w http.ResponseWriter, r *http.Request) {
+		SetHandlerFault(r.Context(), errors.New("db down"))
+		w.WriteHeader(200)
+	})
+	r.Get("/broken", func(w http.ResponseWriter, r *http.Request) {
+		SetHandlerError(r.Context(), "stale")
+		SetHandlerFault(r.Context(), errors.New("db down"))
+		w.WriteHeader(500)
+	})
+
+	srv := httptest.NewServer(r)
+	defer srv.Close()
+	httpGet(t, srv.URL+"/masked")
+	httpGet(t, srv.URL+"/broken")
+
+	spans := exporter.GetSpans()
+	if len(spans) != 2 {
+		t.Fatalf("expected 2 spans, got %d", len(spans))
+	}
+	for _, s := range spans {
+		route, _ := attrString(s.Attributes, "http.route")
+		if msg, _ := attrString(s.Attributes, "bilt.handler_error"); msg != "db down" {
+			t.Errorf("%s: want bilt.handler_error=db down, got %q", route, msg)
+		}
+		if s.Status.Code != codes.Error {
+			t.Errorf("%s: want Error status, got %v", route, s.Status)
+		}
+		exceptions := 0
+		for _, ev := range s.Events {
+			if ev.Name == "exception" {
+				exceptions++
+			}
+		}
+		if exceptions != 1 {
+			t.Errorf("%s: want exactly 1 exception event, got %d", route, exceptions)
+		}
 	}
 }
 
