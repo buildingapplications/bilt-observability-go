@@ -53,13 +53,15 @@ func main() {
     }
 
     db := openDB()
-    obs.OnShutdown(func(context.Context) error { db.Close(); return nil })
 
     r := obs.Mux()
     r.Handle("/health/*", obs.Health(db.Ping))
     r.Get("/api/things", listThings)
 
-    if err := obs.Serve(ctx, obs.Server{Server: &http.Server{Addr: ":8080", Handler: r}}); err != nil {
+    lc := obs.Lifecycle{
+        AfterDrain: func(context.Context) error { db.Close(); return nil },
+    }
+    if err := obs.Serve(ctx, lc, obs.Server{Server: &http.Server{Addr: ":8080", Handler: r}}); err != nil {
         obs.Logger("bilt-sessions").Fatalw("serve", "error", err)
     }
 }
@@ -71,9 +73,14 @@ func main() {
 
 1. Bind every server's listener (`Server.Listener` if set, else `Addr`), then serve them all.
 2. Wait for SIGINT, SIGTERM, `ctx` cancellation or the first serve error.
-3. Drain all servers concurrently, each within `Server.DrainTimeout` (default 15s), then close what is left.
-4. Run `OnShutdown` hooks in reverse registration order (close DB/Redis, stop workers, final flushes).
-5. Call the `Shutdown` returned by `Init`, flushing spans from the drained requests and the hooks.
+3. Run `Lifecycle.BeforeDrain` while the servers still serve: fail readiness and finish in-flight work, or close
+   long-lived streams that `Shutdown` would otherwise wait on.
+4. Drain all servers concurrently, each within `Server.DrainTimeout` (default 15s), then close what is left.
+5. Run `Lifecycle.AfterDrain`: close DB/Redis, stop workers, final flushes.
+6. Call the `Shutdown` returned by `Init`, flushing spans from the requests and both steps.
+
+Serve puts no deadline on either step, so each bounds its own work. Nil steps are skipped. After a listen error,
+only `AfterDrain` and the telemetry flush run.
 
 Do not call `Init`'s `Shutdown` yourself when using `Serve`. It is idempotent, so a leftover `defer` is harmless.
 `Serve` sets `ReadHeaderTimeout` to 10s when zero and leaves Read/Write/Idle timeouts as given, because
@@ -99,8 +106,7 @@ obs.RequestIDFromContext(ctx) string
 obs.HTTPMiddleware(lg, MiddlewareOptions) func(http.Handler) http.Handler
 obs.Mux() *chi.Mux                                       // chi router with HTTPMiddleware installed
 obs.Health(ready ...func(ctx) error) http.Handler        // /health/live + /health/ready
-obs.Serve(ctx, servers ...obs.Server) error              // listen, wait for signal, drain, hooks, telemetry shutdown
-obs.OnShutdown(func(ctx) error)                          // run after drain, before telemetry shutdown
+obs.Serve(ctx, obs.Lifecycle, servers ...obs.Server) error // listen, signal, BeforeDrain, drain, AfterDrain, telemetry shutdown
 
 obs.WithHandlerError(ctx) ctx                // (auto-called by HTTPMiddleware)
 obs.SetHandlerError(ctx, msg string)         // call from handler/error mapper
