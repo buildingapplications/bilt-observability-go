@@ -4,26 +4,49 @@ import "context"
 
 type handlerErrKey struct{}
 
-// WithHandlerError attaches a slot to ctx where a handler can record an error
-// message that the access-log middleware reads on the way out. Called
-// automatically by HTTPMiddleware unless MiddlewareOptions.DisableHandlerError
-// is set, so handlers rarely call this directly.
-func WithHandlerError(ctx context.Context) context.Context {
-	return context.WithValue(ctx, handlerErrKey{}, new(string))
+type handlerErr struct {
+	msg   string
+	fault error
 }
 
-// SetHandlerError records msg on ctx. No-op if WithHandlerError was not called.
-// Safe to call from any handler / domain-error mapper.
+// WithHandlerError attaches the slot HTTPMiddleware reads. HTTPMiddleware calls it.
+func WithHandlerError(ctx context.Context) context.Context {
+	return context.WithValue(ctx, handlerErrKey{}, new(handlerErr))
+}
+
+// SetHandlerError records msg; HTTPMiddleware reports it only on a status >= 400.
 func SetHandlerError(ctx context.Context, msg string) {
-	if p, ok := ctx.Value(handlerErrKey{}).(*string); ok {
-		*p = msg
+	if p := slot(ctx); p != nil {
+		p.msg = msg
+	}
+}
+
+// SetHandlerFault marks the request as failed internally; HTTPMiddleware reports it at any status.
+// It wins over SetHandlerError. A nil err is ignored.
+func SetHandlerFault(ctx context.Context, err error) {
+	if p := slot(ctx); p != nil && err != nil {
+		p.msg = err.Error()
+		p.fault = err
 	}
 }
 
 // HandlerError returns the recorded message, or "" if absent.
 func HandlerError(ctx context.Context) string {
-	if p, ok := ctx.Value(handlerErrKey{}).(*string); ok {
-		return *p
+	if p := slot(ctx); p != nil {
+		return p.msg
 	}
 	return ""
+}
+
+// HandlerFault returns the error recorded by SetHandlerFault, or nil.
+func HandlerFault(ctx context.Context) error {
+	if p := slot(ctx); p != nil {
+		return p.fault
+	}
+	return nil
+}
+
+func slot(ctx context.Context) *handlerErr {
+	p, _ := ctx.Value(handlerErrKey{}).(*handlerErr)
+	return p
 }

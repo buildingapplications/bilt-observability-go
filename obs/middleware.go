@@ -8,6 +8,7 @@ import (
 	chimiddleware "github.com/go-chi/chi/v5/middleware"
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/trace"
 	"go.uber.org/zap"
 )
@@ -34,8 +35,10 @@ type MiddlewareOptions struct {
 //
 // Handler errors recorded via SetHandlerError are set as the
 // bilt.handler_error span attribute when the response status is >= 400, plus
-// a RecordError event when it is >= 500. No access log is emitted; the span
-// (with trace_id) is the single source of truth for per-request observability.
+// a RecordError event when it is >= 500. A fault recorded via SetHandlerFault
+// is reported at any status: bilt.handler_error, one RecordError, and Error
+// span status. No access log is emitted; the span (with trace_id) is the
+// single source of truth for per-request observability.
 func HTTPMiddleware(lg *zap.SugaredLogger, opts MiddlewareOptions) func(http.Handler) http.Handler {
 	skip := opts.SkipPaths
 	if len(skip) == 0 {
@@ -79,7 +82,8 @@ func otelWithSkip(serverName string, skip map[string]struct{}) func(http.Handler
 // captureErrorAndRoute wraps the response so status is readable after the
 // handler runs, allocates the handler-error slot, and on the way out:
 //   - sets http.route from chi RouteContext
-//   - promotes SetHandlerError(msg) onto the span when status >= 400
+//   - promotes SetHandlerFault(err) onto the span at any status
+//   - otherwise promotes SetHandlerError(msg) when status >= 400
 func captureErrorAndRoute() func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -96,14 +100,16 @@ func captureErrorAndRoute() func(http.Handler) http.Handler {
 					span.SetName(r.Method + " " + pattern)
 				}
 			}
-			if ww.Status() >= 400 {
-				if msg := HandlerError(ctx); msg != "" {
-					span.SetAttributes(attribute.String("bilt.handler_error", msg))
-					// A 4xx is the client's fault (OTel server semconv); an exception
-					// event on it buries real faults. otelhttp owns the Error status.
-					if ww.Status() >= 500 {
-						span.RecordError(errors.New(msg))
-					}
+			if he := slot(ctx); he.fault != nil {
+				span.SetAttributes(attribute.String("bilt.handler_error", he.fault.Error()))
+				span.RecordError(he.fault)
+				span.SetStatus(codes.Error, he.fault.Error())
+			} else if ww.Status() >= 400 && he.msg != "" {
+				span.SetAttributes(attribute.String("bilt.handler_error", he.msg))
+				// A 4xx is the client's fault (OTel server semconv); an exception
+				// event on it buries real faults. otelhttp owns the Error status.
+				if ww.Status() >= 500 {
+					span.RecordError(errors.New(he.msg))
 				}
 			}
 		})
