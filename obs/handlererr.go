@@ -38,6 +38,14 @@ func HandlerError(ctx context.Context) string {
 	return ""
 }
 
+// HandlerFault returns the error recorded by SetHandlerFault, or nil.
+func HandlerFault(ctx context.Context) error {
+	if p := slot(ctx); p != nil {
+		return p.fault
+	}
+	return nil
+}
+
 func slot(ctx context.Context) *handlerErr {
 	p, _ := ctx.Value(handlerErrKey{}).(*handlerErr)
 	return p

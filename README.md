@@ -74,6 +74,7 @@ obs.WithHandlerError(ctx) ctx                // (auto-called by HTTPMiddleware)
 obs.SetHandlerError(ctx, msg string)         // call from handler/error mapper
 obs.SetHandlerFault(ctx, err error)          // internal failure; span error at any status
 obs.HandlerError(ctx) string                 // (read by HTTPMiddleware on 4xx/5xx)
+obs.HandlerFault(ctx) error                  // the error SetHandlerFault recorded, or nil
 obs.HTTPClient(*http.Client) *http.Client
 obs.HTTPTransport(http.RoundTripper) http.RoundTripper   // for transport slots; client spans are named "<METHOD> <host>"
 obs.DefaultHealthPaths() []string

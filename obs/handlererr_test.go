@@ -31,6 +31,19 @@ func TestHandlerError_NoSlotIsNoop(t *testing.T) {
 	}
 }
 
+func TestHandlerFault_RoundTrip(t *testing.T) {
+	ctx := WithHandlerError(context.Background())
+	SetHandlerFault(ctx, nil)
+	if got := HandlerFault(ctx); got != nil {
+		t.Errorf("a nil fault was recorded: %v", got)
+	}
+	boom := errors.New("boom")
+	SetHandlerFault(ctx, boom)
+	if got := HandlerFault(ctx); got != boom || HandlerError(ctx) != "boom" {
+		t.Errorf("fault %v, message %q", got, HandlerError(ctx))
+	}
+}
+
 func TestHTTPMiddleware_HandlerFault_ReportedAtAnyStatus(t *testing.T) {
 	resetForTest()
 	exporter := newTestTracer(t)
