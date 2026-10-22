@@ -334,7 +334,4 @@ func resetForTest() {
 	cachedHealth = nil
 	cachedService = ""
 	cachedContextFields = nil
-	hooksMu.Lock()
-	hooks = nil
-	hooksMu.Unlock()
 }

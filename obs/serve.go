@@ -7,7 +7,6 @@ import (
 	"net"
 	"net/http"
 	"os/signal"
-	"slices"
 	"sync"
 	"syscall"
 	"time"
@@ -16,7 +15,6 @@ import (
 const (
 	defaultReadHeaderTimeout = 10 * time.Second
 	defaultDrainTimeout      = 15 * time.Second
-	hookTimeout              = 15 * time.Second
 	telemetryFlushTimeout    = 5 * time.Second
 )
 
@@ -31,39 +29,49 @@ type Server struct {
 	DrainTimeout time.Duration
 }
 
-var (
-	hooksMu sync.Mutex
-	hooks   []func(context.Context) error
-)
-
-// OnShutdown registers fn to run in Serve after the servers drain and before
-// telemetry shuts down, so its spans and logs are flushed. Hooks run in
-// reverse registration order, like defers.
-func OnShutdown(fn func(context.Context) error) {
-	hooksMu.Lock()
-	defer hooksMu.Unlock()
-	hooks = append(hooks, fn)
+// Lifecycle holds a service's shutdown steps. Serve imposes no deadline on
+// either step, so each bounds its own work; a nil step is skipped.
+type Lifecycle struct {
+	// BeforeDrain runs after the stop signal while the servers still serve,
+	// e.g. failing readiness and finishing in-flight work, or closing streams
+	// that Shutdown would otherwise wait on.
+	BeforeDrain func(context.Context) error
+	// AfterDrain runs once the servers have drained and before telemetry shuts
+	// down, so its spans are flushed: close DB/Redis, stop workers.
+	AfterDrain func(context.Context) error
 }
 
 // Serve binds every server, then serves them until SIGINT, SIGTERM, ctx
-// cancellation or the first serve error. It then drains all servers
-// concurrently, runs the OnShutdown hooks, and calls the Shutdown returned by
-// Init. Callers should not call that Shutdown themselves. The error joins the
-// first listen error with any shutdown errors.
-func Serve(ctx context.Context, servers ...Server) error {
+// cancellation or the first serve error. It then runs lc.BeforeDrain, drains
+// all servers concurrently, runs lc.AfterDrain, and finally calls the
+// Shutdown returned by Init, which callers should not call themselves. The
+// error joins the first listen or serve error with any shutdown errors.
+func Serve(ctx context.Context, lc Lifecycle, servers ...Server) error {
 	ctx, stop := signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
+	bg := context.WithoutCancel(ctx)
 
-	var listenErr, drainErr error
-	lns, err := listenAll(servers)
-	if err != nil {
-		listenErr = err
+	var serveErr, beforeErr, drainErr error
+	if lns, err := listenAll(servers); err != nil {
+		serveErr = err
 	} else {
-		listenErr = serveUntilDone(ctx, servers, lns)
+		serveErr = serveUntilDone(ctx, servers, lns)
 		stop()
-		drainErr = drainAll(context.WithoutCancel(ctx), servers)
+		beforeErr = runStep(bg, "before drain", lc.BeforeDrain)
+		drainErr = drainAll(bg, servers)
 	}
-	return errors.Join(listenErr, drainErr, finish(context.WithoutCancel(ctx)))
+	afterErr := runStep(bg, "after drain", lc.AfterDrain)
+	return errors.Join(serveErr, beforeErr, drainErr, afterErr, flushTelemetry(bg))
+}
+
+func runStep(ctx context.Context, name string, fn func(context.Context) error) error {
+	if fn == nil {
+		return nil
+	}
+	if err := fn(ctx); err != nil {
+		return fmt.Errorf("obs.Serve: %s: %w", name, err)
+	}
+	return nil
 }
 
 func listenAll(servers []Server) ([]net.Listener, error) {
@@ -148,29 +156,17 @@ func drainAll(ctx context.Context, servers []Server) error {
 	return errors.Join(errs...)
 }
 
-func finish(ctx context.Context) error {
-	hooksMu.Lock()
-	fns := slices.Clone(hooks)
-	hooksMu.Unlock()
-
-	var errs []error
-	hctx, cancel := context.WithTimeout(ctx, hookTimeout)
-	for _, fn := range slices.Backward(fns) {
-		if err := fn(hctx); err != nil {
-			errs = append(errs, fmt.Errorf("obs.Serve: shutdown hook: %w", err))
-		}
-	}
-	cancel()
-
+func flushTelemetry(ctx context.Context) error {
 	initMu.Lock()
 	shut := cachedShut
 	initMu.Unlock()
-	if shut != nil {
-		tctx, cancel := context.WithTimeout(ctx, telemetryFlushTimeout)
-		defer cancel()
-		if err := shut(tctx); err != nil {
-			errs = append(errs, fmt.Errorf("obs.Serve: telemetry: %w", err))
-		}
+	if shut == nil {
+		return nil
 	}
-	return errors.Join(errs...)
+	ctx, cancel := context.WithTimeout(ctx, telemetryFlushTimeout)
+	defer cancel()
+	if err := shut(ctx); err != nil {
+		return fmt.Errorf("obs.Serve: telemetry: %w", err)
+	}
+	return nil
 }

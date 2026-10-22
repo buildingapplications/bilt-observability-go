@@ -8,7 +8,6 @@ import (
 	"slices"
 	"sync"
 	"testing"
-	"time"
 )
 
 type eventLog struct {
@@ -45,25 +44,40 @@ func TestServe_DrainsBeforeTelemetryShutdown(t *testing.T) {
 	initialized = true
 	cachedShut = once(func(context.Context) error { log.add("telemetry"); return nil })
 	initMu.Unlock()
-	OnShutdown(func(context.Context) error { log.add("hook-first-registered"); return nil })
-	OnShutdown(func(context.Context) error { log.add("hook-last-registered"); return nil })
-
 	entered := make(chan struct{})
 	release := make(chan struct{})
-	srv := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/slow", func(w http.ResponseWriter, r *http.Request) {
 		close(entered)
 		<-release
 		log.add("request")
-	})}
+	})
+	mux.HandleFunc("/fast", func(w http.ResponseWriter, r *http.Request) {})
+	srv := &http.Server{Handler: mux}
 	ln := listen(t)
+	base := "http://" + ln.Addr().String()
+
+	lc := Lifecycle{
+		BeforeDrain: func(context.Context) error {
+			resp, err := http.Get(base + "/fast")
+			if err != nil {
+				return err
+			}
+			_ = resp.Body.Close()
+			log.add("before")
+			close(release)
+			return nil
+		},
+		AfterDrain: func(context.Context) error { log.add("after"); return nil },
+	}
 
 	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan error, 1)
-	go func() { done <- Serve(ctx, Server{Server: srv, Listener: ln}) }()
+	go func() { done <- Serve(ctx, lc, Server{Server: srv, Listener: ln}) }()
 
 	reqDone := make(chan error, 1)
 	go func() {
-		resp, err := http.Get("http://" + ln.Addr().String())
+		resp, err := http.Get(base + "/slow")
 		if err == nil {
 			_ = resp.Body.Close()
 		}
@@ -71,11 +85,6 @@ func TestServe_DrainsBeforeTelemetryShutdown(t *testing.T) {
 	}()
 	<-entered
 	cancel()
-	time.Sleep(50 * time.Millisecond)
-	if got := log.get(); len(got) != 0 {
-		t.Fatalf("shutdown ran before the request drained: %v", got)
-	}
-	close(release)
 
 	if err := <-reqDone; err != nil {
 		t.Fatalf("in-flight request: %v", err)
@@ -83,7 +92,7 @@ func TestServe_DrainsBeforeTelemetryShutdown(t *testing.T) {
 	if err := <-done; err != nil {
 		t.Fatalf("Serve: %v", err)
 	}
-	want := []string{"request", "hook-last-registered", "hook-first-registered", "telemetry"}
+	want := []string{"before", "request", "after", "telemetry"}
 	if got := log.get(); !slices.Equal(got, want) {
 		t.Fatalf("order: got %v want %v", got, want)
 	}
@@ -95,17 +104,21 @@ func TestServe_DrainsBeforeTelemetryShutdown(t *testing.T) {
 func TestServe_ReturnsListenErrorAndStillShutsDown(t *testing.T) {
 	resetForTest()
 	t.Cleanup(resetForTest)
-	var shut bool
+	var log eventLog
 	initMu.Lock()
 	initialized = true
-	cachedShut = func(context.Context) error { shut = true; return nil }
+	cachedShut = func(context.Context) error { log.add("telemetry"); return nil }
 	initMu.Unlock()
 
 	taken := listen(t)
 	defer func() { _ = taken.Close() }()
 	free := listen(t)
 
-	err := Serve(t.Context(),
+	lc := Lifecycle{
+		BeforeDrain: func(context.Context) error { log.add("before"); return nil },
+		AfterDrain:  func(context.Context) error { log.add("after"); return nil },
+	}
+	err := Serve(t.Context(), lc,
 		Server{Server: &http.Server{}, Listener: free},
 		Server{Server: &http.Server{Addr: taken.Addr().String()}},
 	)
@@ -113,8 +126,8 @@ func TestServe_ReturnsListenErrorAndStillShutsDown(t *testing.T) {
 	if !errors.As(err, &opErr) {
 		t.Fatalf("want listen error, got %v", err)
 	}
-	if !shut {
-		t.Error("telemetry not shut down after listen error")
+	if got, want := log.get(), []string{"after", "telemetry"}; !slices.Equal(got, want) {
+		t.Errorf("after listen error: got %v want %v", got, want)
 	}
 	if _, err := net.Dial("tcp", free.Addr().String()); err == nil {
 		t.Error("pre-bound listener left open")
