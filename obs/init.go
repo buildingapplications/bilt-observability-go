@@ -23,7 +23,8 @@ import (
 	"go.uber.org/zap"
 )
 
-// Shutdown flushes pending telemetry and tears down providers. Always defer it.
+// Shutdown flushes pending telemetry and tears down providers. Serve calls it;
+// without Serve, defer it. Calls after the first return the first result.
 type Shutdown func(ctx context.Context) error
 
 // BSPOptions tunes the BatchSpanProcessor. Zero values use defaults that mirror
@@ -136,7 +137,7 @@ func Init(ctx context.Context, cfg *Config) (Shutdown, error) {
 	cachedService = cfg.ServiceName
 	cachedContextFields = cfg.ContextFields
 
-	cachedShut = func(ctx context.Context) error {
+	cachedShut = once(func(ctx context.Context) error {
 		var errs []error
 		if err := tpShutdown(ctx); err != nil {
 			errs = append(errs, fmt.Errorf("tracer: %w", err))
@@ -148,9 +149,18 @@ func Init(ctx context.Context, cfg *Config) (Shutdown, error) {
 			_ = l.Sync()
 		}
 		return errors.Join(errs...)
-	}
+	})
 	initialized = true
 	return cachedShut, nil
+}
+
+func once(fn Shutdown) Shutdown {
+	var o sync.Once
+	var err error
+	return func(ctx context.Context) error {
+		o.Do(func() { err = fn(ctx) })
+		return err
+	}
 }
 
 // DefaultHealthPaths returns the canonical bilt health endpoint set. Lib skips
@@ -324,4 +334,7 @@ func resetForTest() {
 	cachedHealth = nil
 	cachedService = ""
 	cachedContextFields = nil
+	hooksMu.Lock()
+	hooks = nil
+	hooksMu.Unlock()
 }
