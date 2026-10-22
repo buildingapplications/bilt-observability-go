@@ -74,6 +74,7 @@ var (
 	cachedShut          Shutdown
 	cachedLogger        *zap.SugaredLogger
 	cachedHealth        []string
+	cachedService       string
 	cachedContextFields func(context.Context) []any
 )
 
@@ -132,6 +133,7 @@ func Init(ctx context.Context, cfg *Config) (Shutdown, error) {
 
 	cachedLogger = buildLogger(cfg.ServiceName, cfg.LogLevel)
 	cachedHealth = resolveHealthPaths(cfg.HealthPaths)
+	cachedService = cfg.ServiceName
 	cachedContextFields = cfg.ContextFields
 
 	cachedShut = func(ctx context.Context) error {
@@ -306,6 +308,7 @@ func InitLogger(serviceName, logLevel string) {
 func initLoggerOnly(cfg *Config) {
 	cachedLogger = buildLogger(cfg.ServiceName, cfg.LogLevel)
 	cachedHealth = resolveHealthPaths(cfg.HealthPaths)
+	cachedService = cfg.ServiceName
 	cachedContextFields = cfg.ContextFields
 	cachedShut = func(context.Context) error { return nil }
 	initialized = true
@@ -319,5 +322,6 @@ func resetForTest() {
 	cachedShut = nil
 	cachedLogger = nil
 	cachedHealth = nil
+	cachedService = ""
 	cachedContextFields = nil
 }

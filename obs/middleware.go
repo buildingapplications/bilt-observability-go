@@ -53,6 +53,9 @@ func HTTPMiddleware(lg *zap.SugaredLogger, opts MiddlewareOptions) func(http.Han
 	}
 
 	serverName := opts.ServerName
+	if serverName == "" {
+		serverName = cachedService
+	}
 
 	return func(next http.Handler) http.Handler {
 		stack := next
