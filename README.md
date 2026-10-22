@@ -22,7 +22,8 @@ One `Init` call wires:
 - OTel TracerProvider over OTLP gRPC and a MeterProvider with OTLP and optional pull readers
 - W3C TraceContext + Baggage propagators
 - runtime metrics (`process.runtime.go.*`)
-- chi HTTP middleware (RequestID, RealIP, panic recovery logged + recorded on the span, otelhttp, http.route templating, access log) with health-path skip
+- chi HTTP middleware (RequestID, RealIP, panic recovery logged + recorded on the span, otelhttp, http.route templating) with health-path skip
+- `Mux`, `Health` and `Serve`: the shared router, health endpoints and graceful-shutdown lifecycle
 - otelhttp-wrapped outbound `http.Client`
 - Redis traceparent inject/extract + producer/consumer spans
 - pgx query/connect/acquire spans, named off the sqlc query name
@@ -34,28 +35,57 @@ package main
 
 import (
     "context"
+    "net/http"
+
     "github.com/buildingapplications/bilt-observability-go/obs"
 )
 
 func main() {
     ctx := context.Background()
 
-    shutdown, err := obs.Init(ctx, &obs.Config{
+    if _, err := obs.Init(ctx, &obs.Config{
         ServiceName:  "bilt-sessions",
         LogLevel:     "info",
         Environment:  "production",
         OTelEndpoint: "http://otel-collector:4317",
-        HealthPaths:  obs.DefaultHealthPaths(),
-    })
-    if err != nil {
+    }); err != nil {
         panic(err)
     }
-    defer shutdown(ctx)
 
-    lg := obs.Logger("bilt-sessions")
-    lg.Infow("started")
+    db := openDB()
+    obs.OnShutdown(func(context.Context) error { db.Close(); return nil })
+
+    r := obs.Mux()
+    r.Handle("/health/*", obs.Health(db.Ping))
+    r.Get("/api/things", listThings)
+
+    if err := obs.Serve(ctx, obs.Server{Server: &http.Server{Addr: ":8080", Handler: r}}); err != nil {
+        obs.Logger("bilt-sessions").Fatalw("serve", "error", err)
+    }
 }
 ```
+
+## Serving
+
+`obs.Serve` owns the process lifecycle so every service shuts down in the same order:
+
+1. Bind every server's listener (`Server.Listener` if set, else `Addr`), then serve them all.
+2. Wait for SIGINT, SIGTERM, `ctx` cancellation or the first serve error.
+3. Drain all servers concurrently, each within `Server.DrainTimeout` (default 15s), then close what is left.
+4. Run `OnShutdown` hooks in reverse registration order (close DB/Redis, stop workers, final flushes).
+5. Call the `Shutdown` returned by `Init`, flushing spans from the drained requests and the hooks.
+
+Do not call `Init`'s `Shutdown` yourself when using `Serve`. It is idempotent, so a leftover `defer` is harmless.
+`Serve` sets `ReadHeaderTimeout` to 10s when zero and leaves Read/Write/Idle timeouts as given, because
+websockets, SSE and proxies need none. A `Server` with `TLSConfig` serves TLS. The returned error joins the
+first listen or serve error with any shutdown errors.
+
+`obs.Health(checks...)` serves `/health/live` (always 200) and `/health/ready`, which runs the checks concurrently
+within 2s and answers 503 `not ready: <first error>`. It records nothing on spans; both paths are in the default
+skip list. Mount it with `r.Handle("/health/*", ...)` or `mux.Handle("/health/", ...)`.
+
+`obs.Mux()` is `chi.NewRouter()` with `HTTPMiddleware` installed (panic recovery included), using the skip paths and
+service name from `Init`. Call it after `Init`. Add your own middleware with `r.Use` after it.
 
 ## API
 
@@ -67,8 +97,10 @@ obs.LoggerFromContext(ctx, fallback) *zap.SugaredLogger  // Log(ctx) with an exp
 obs.WithRequestID(ctx, id) context.Context
 obs.RequestIDFromContext(ctx) string
 obs.HTTPMiddleware(lg, MiddlewareOptions) func(http.Handler) http.Handler
-// MiddlewareOptions.EnrichLogFields(ctx, status) []any  // optional access-log enrichment
-// MiddlewareOptions.DisableHandlerError bool             // opt out of auto handler-error wiring
+obs.Mux() *chi.Mux                                       // chi router with HTTPMiddleware installed
+obs.Health(ready ...func(ctx) error) http.Handler        // /health/live + /health/ready
+obs.Serve(ctx, servers ...obs.Server) error              // listen, wait for signal, drain, hooks, telemetry shutdown
+obs.OnShutdown(func(ctx) error)                          // run after drain, before telemetry shutdown
 
 obs.WithHandlerError(ctx) ctx                // (auto-called by HTTPMiddleware)
 obs.SetHandlerError(ctx, msg string)         // call from handler/error mapper
